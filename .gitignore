@@ -1,0 +1,26 @@
+# Default ignore all
+*
+
+# Keep directories
+!*/
+!.gitignore
+!README.md
+
+# Keep notebooks in Notebook and its subfolders
+!Notebook/
+!Notebook/**/
+!Notebook/*.ipynb
+!Notebook/**/*.ipynb
+
+# Keep python scripts in Script and its subfolders
+!Script/
+!Script/**/
+!Script/*.py
+!Script/**/*.py
+
+# Ignore temporary files
+**/.ipynb_checkpoints/
+*.swp
+*.swo
+*~
+.DS_Store
