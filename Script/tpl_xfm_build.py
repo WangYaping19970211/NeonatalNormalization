@@ -541,42 +541,104 @@ def unimodal_register_pipeline(modalities, input_files, tpl_root, tpl_month, out
             "T2": os.path.join(tpl_root, f'{tpl_month}Month/BCP-{tpl_month}M-T2.nii.gz')
         }
 
-    
-    
-
     # Step 1: Registration
     for modality in modalities:
         # Generate commands
         commands = []
     
-        brain_img = input_files[modality]
-        tpl = register_tpls[modality]
-        fix_mask = tpl.replace(f'-{modality}.nii.gz', '-Mask.nii.gz')
+        
+        brain_img_T1 = input_files['T1']
+        brain_img_T2 = input_files['T2']
+        tpl_T1 = register_tpls['T1']
+        tpl_T2 = register_tpls['T2']
+        fix_mask = tpl_T1.replace(f'-T1.nii.gz', '-Mask.nii.gz')
         print("[INFO] No moving mask used")
         mask_param = fix_mask
-        out_prefix = os.path.join(output_dir, f'{modality}only_Brain_pad_Norm_to_{tpl_month}Mtpl_')
-        warped_output = os.path.join(output_dir, f'{modality}only_Brain_pad_Norm_to_{tpl_month}Mtpl_Warped.nii.gz')
+        if modality == "T1T2":
+            out_prefix = os.path.join(output_dir, f'{modality}_Brain_pad_Norm_to_{tpl_month}Mtpl_')
+            warped_output = os.path.join(output_dir, f'T1_Brain_pad_Norm_to_{tpl_month}Mtpl_Warped.nii.gz')
+            cmd = f"""
+            antsRegistration --verbose 1 -d 3 \\
+            -o [{out_prefix}, {warped_output}] \\
+            -x {mask_param} \\
+            -m MI[{tpl_T1}, {brain_img_T1}, 1, 32, Regular, 0.25] \\
+            -m MI[{tpl_T2}, {brain_img_T2}, 1, 32, Regular, 0.25] \\
+            -t Rigid[0.1] \\
+            -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
+            -m MI[{tpl_T1}, {brain_img_T1}, 1, 32, Regular, 0.25] \\
+            -m MI[{tpl_T2}, {brain_img_T2}, 1, 32, Regular, 0.25] \\
+            -t Affine[0.1] \\
+            -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
+            -m MI[{tpl_T1}, {brain_img_T1}, 1, 32, Regular, 0.25] \\
+            -m MI[{tpl_T2}, {brain_img_T2}, 1, 32, Regular, 0.25] \\
+            -t SyN[0.1, 3, 0] \\
+            -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
+            -u 1 -z 1
+            """
+            commands.append(cmd.strip())
 
-        cmd = f"""
-        antsRegistration --verbose 1 -d 3 \\
-        -o [{out_prefix}, {warped_output}] \\
-        -x {mask_param} \\
-        \\
-        -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
-        -t Rigid[0.1] \\
-        -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
-        \\
-        -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
-        -t Affine[0.1] \\
-        -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
-        \\
-        -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
-        -t SyN[0.1, 3, 0] \\
-        -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
-        -u 1 -z 1
-        """
-        commands.append(cmd.strip())
-        
+        else:
+            brain_img = input_files[modality]
+            tpl = register_tpls[modality]
+            out_prefix = os.path.join(output_dir, f'{modality}only_SyNsh_Brain_pad_Norm_to_{tpl_month}Mtpl_')
+            warped_output = os.path.join(output_dir, f'{modality}only_SyNsh_Brain_pad_Norm_to_{tpl_month}Mtpl_Warped.nii.gz')
+            cmd = f"""
+            antsRegistration --verbose 1 -d 3 \\
+            -o [{out_prefix}, {warped_output}] \\
+            -x {mask_param} \\
+            -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
+            -t Rigid[0.1] \\
+            -c [1000x500x250x100,1e-8,10] -s 4x2x1x0 -f 8x4x2x1 \\
+            -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
+            -t Affine[0.1] \\
+            -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
+            -m MI[{tpl}, {brain_img}, 1, 32, Regular, 0.25] \\
+            -t SyN[0.1, 3, 0] \\
+            -c [100x100x70x20,1e-6,10] -s 4x2x1x0 -f 6x4x2x1 \\
+            -u 1 -z 1
+            """
+            commands.append(cmd.strip())
+            cmd = f"""
+            antsRegistrationSyN.sh -d 3 \\
+            -f {tpl} \\
+            -m {brain_img} \\
+            -o {out_prefix} \\
+            -x {mask_param} \\
+            -n {num_threads} 
+            """
+            commands.append(cmd.strip())
+        if modality in ['T1', 'T2']:
+            keys = [f"{modality}only",f'{modality}only_SyNsh']
+        else:
+            keys = [modality]
+        for key in keys:
+            xfm_chain = []
+            aff_path = os.path.join(output_dir, f"{key}_Brain_pad_Norm_to_{tpl_month}Mtpl_0GenericAffine.mat")
+            xfm_chain.append(f"-t {aff_path}")
+            warp_path = os.path.join(output_dir, f"{key}_Brain_pad_Norm_to_{tpl_month}Mtpl_1Warp.nii.gz")
+            xfm_chain.append(f"-t {warp_path}")
+            # Reverse for antsApplyTransforms (last → first)
+            xfm_chain.reverse()
+            # Format lines: add "\" to all except last
+            xfm_lines = [f"{line} \\" for line in xfm_chain[:-1]]
+            xfm_lines.append(xfm_chain[-1])
+            xfm_chain_str = "\n    ".join(xfm_lines)  
+            reslice_cmd = f"""
+                antsApplyTransforms -d 3 \\
+                -i {brain_img_T1} \\
+                -r {tpl_T1} \\
+                -o {os.path.join(output_dir, f'T1_Brain_pad_resliced_to_{tpl_month}Mtpl_by_{key}_xfm.nii.gz')} \\
+                {xfm_chain_str}
+                """
+            commands.append(reslice_cmd.strip())
+            reslice_cmd = f"""
+                antsApplyTransforms -d 3 \\
+                -i {brain_img_T2} \\
+                -r {tpl_T2} \\
+                -o {os.path.join(output_dir, f'T2_Brain_pad_resliced_to_{tpl_month}Mtpl_by_{key}_xfm.nii.gz')} \\
+                {xfm_chain_str}
+                """
+            commands.append(reslice_cmd.strip())
 
         # Combine all commands
         full_cmd = "\n\n".join(commands)
