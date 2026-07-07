@@ -1,22 +1,23 @@
 # Default ignore all
 *
 
-# Keep directories
+# Keep directories so git can descend into them
 !*/
 !.gitignore
 !README.md
 
-# Keep notebooks in Notebook and its subfolders
-!Notebook/
-!Notebook/**/
-!Notebook/*.ipynb
-!Notebook/**/*.ipynb
+# Notebook: only the tutorial
+/Notebook/*
+!/Notebook/SickKids_tutorial.ipynb
 
-# Keep python scripts in Script and its subfolders
-!Script/
-!Script/**/
-!Script/*.py
-!Script/**/*.py
+# Script: only these two (pre01_iBEAT is a directory -> re-include its contents)
+/Script/*
+!/Script/pre01_iBEAT
+!/Script/pre01_iBEAT/**
+!/Script/tpl_xfm_build.py
+
+# Templates: keep everything under templates/
+!/templates/**
 
 # Ignore temporary files
 **/.ipynb_checkpoints/
