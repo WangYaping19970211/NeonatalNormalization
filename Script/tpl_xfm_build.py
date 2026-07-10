@@ -2305,7 +2305,71 @@ def subj_concate_JD_and_resli(transf_type, pipel_dir, dataset_subs, tpl_mov_mont
         submit_bash_job(full_cmd, job_script, job_prefix, output_log, error_log, num_threads, verbose)
     return True
 
-    
+
+
+def T1_cereb_isolate(T1_file, output_dir, **kwargs):
+    """
+    Run SUIT isolation for each subject: T1_Brain_pad.nii.gz → T1_Brain_pad_cerebellum_dseg.nii.gz
+    Skipped per-subject if the mask already exists.
+    Submit this first; use the returned job_id as dependency_jobid for subj_cereb_reslice.
+
+    Args:
+        pipel_dir    (str)          : pipeline root directory (…/Data)
+        dataset_subs (pd.DataFrame) : columns ['dataset', 'participant_id']
+        kwargs       : num_threads, slurm, verbose, time_limit, mem, job_prefix, …
+    Returns:
+        job_id (str or None)
+    """
+    num_threads = kwargs.get('num_threads', 4)
+    slurm       = kwargs.get('slurm', True)
+    verbose     = kwargs.get('verbose', True)
+    job_prefix  = kwargs.get('job_prefix', 'cereb_isolate')
+
+    commands = []
+
+    suit_cmd = (
+        f'python - <<\'PYEOF\'\n'
+        f'import nibabel as nib\n'
+        f'import numpy as np\n'
+        f'import SUITPy as suit\n'
+        f'\n'
+        f'# Generate brain mask from T1 (already brain-extracted, bg=0)\n'
+        f't1      = nib.load("{T1_file}")\n'
+        f'mask    = (t1.get_fdata() > 0).astype(np.uint8)\n'
+        f'brain_mask_path = "{T1_file}".replace(".nii.gz", "_brain_mask.nii.gz")\n'
+        f'nib.save(nib.Nifti1Image(mask, t1.affine, t1.header), brain_mask_path)\n'
+        f'\n'
+        f'suit.isolate(t1_file="{T1_file}", brain_mask_file=brain_mask_path)\n'
+        f'print("SUIT done: {T1_file}")\n'
+        f'PYEOF'
+    )
+    commands.append(suit_cmd)
+    log_dir    = f'{output_dir}/log/'
+    full_cmd = "\n\n".join(commands)
+
+    if slurm:
+        job_id = submit_slurm_job(
+            full_cmd=full_cmd,
+            log_dir=log_dir,
+            job_prefix=job_prefix,
+            num_threads=num_threads,
+            time_limit=kwargs.get("time_limit", "12:00:00"),
+            mem=kwargs.get("mem", "64G"),
+            ntasks=kwargs.get("ntasks", 1),
+            use_gpu=kwargs.get("use_gpu", False),
+            ants_path=kwargs.get("ants_path", DEFAULT_ANTSPATH),
+            dependency_jobid=kwargs.get("dependency_jobid", None),
+            verbose=verbose,
+        )
+        return job_id
+    else:
+        job_script = os.path.join(log_dir, f"{job_prefix}.sh")
+        output_log = os.path.join(log_dir, f"{job_prefix}.out")
+        error_log  = os.path.join(log_dir, f"{job_prefix}.err")
+        submit_bash_job(full_cmd, job_script, job_prefix,
+                        output_log, error_log, num_threads, verbose)
+        return None
+
 
 def subj_cereb_isolate(pipel_dir, dataset_subs, **kwargs):
     """

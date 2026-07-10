@@ -5,6 +5,7 @@
 !*/
 !.gitignore
 !README.md
+!QC_sickkids/**
 
 # Notebook: only the tutorial
 /Notebook/*
