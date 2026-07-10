@@ -20,8 +20,8 @@ Import this module in your pipeline script, configure paths and job parameters,
 and call one of the submission functions based on your environment.
 """
 
-# ===== Default configuration =====
-DEFAULT_ANTSPATH = "/project/4290000.01/yapwan/toolbox/ANTs/ants-2.6.2" # TODO: [User] Set this to the path where ANTs is installed on your machine
+# ===== Default configuration depends on your server =====
+DEFAULT_ANTSPATH = "/hpf/largeprojects/smiller/tools/rcp_pipeline/conda_environments/rcp_env" # TODO: [User] Set this to the path where ANTs is installed on your machine
 DEFAULT_MEM = "30G"
 DEFAULT_TIME = "36:00:00"
 
@@ -649,6 +649,56 @@ def t1_t2_rigid_and_N4(input_files, output_dir, **kwargs):
 
     return True
 
+
+def N4_bias_correction(input_file, output_file, **kwargs):
+    num_threads = kwargs.get('num_threads', 6)
+    slurm = kwargs.get('slurm', True)
+    verbose = kwargs.get('verbose', True)
+
+    # Generate commands
+    commands = []
+    cmd = f"""
+    N4BiasFieldCorrection -d 3 \\
+    -i {input_file} \\
+    -o {output_file}
+    """
+    commands.append(cmd.strip())
+    
+    # Combine all commands
+    full_cmd = "\n\n".join(commands)
+    # print(full_cmd)
+
+    # Submit
+    output_dir = os.path.dirname(output_file)
+    log_dir = os.path.join(output_dir, "log")
+    # get subid from output_dir
+    fname = os.path.basename(output_file)
+    m = re.search(r'(sub-[A-Za-z0-9]+|bc\d+)', fname)
+    subid = m.group(0).replace("sub-", "") if m else "unknown"
+    job_prefix = f"N4_{subid}"
+    if slurm:
+        submit_slurm_job(
+            full_cmd=full_cmd,
+            log_dir=log_dir,
+            job_prefix=job_prefix,
+            num_threads=kwargs.get("num_threads", 6),
+            time_limit=kwargs.get("time_limit", "36:00:00"),
+            mem=kwargs.get("mem", "30G"),
+            ntasks=kwargs.get("ntasks", 1),
+            use_gpu=kwargs.get("use_gpu", False),
+            gpu_type=kwargs.get("gpu_type", None),
+            email=kwargs.get("email", None),
+            ants_path=kwargs.get("ants_path", DEFAULT_ANTSPATH),
+            dependency_jobid=kwargs.get("dependency_jobid", None),
+            verbose=verbose,
+        )
+    else:
+        job_script = os.path.join(log_dir, f'{job_prefix}.sh')
+        output_log = os.path.join(log_dir, f'{job_prefix}.out')
+        error_log = os.path.join(log_dir, f'{job_prefix}.err')
+        submit_bash_job(full_cmd, job_script, job_prefix, output_log, error_log, num_threads, verbose)
+
+    return True
 
 def multimodal_register_pipeline(modalities, input_files, tpl_root, tpl_month,  output_dir, mov_mask=False, **kwargs):
     """
@@ -2758,8 +2808,7 @@ def submit_slurm_job(
         f"#SBATCH --time={time_limit}",
         f"#SBATCH --ntasks={ntasks}",
         f"#SBATCH --cpus-per-task={num_threads}",
-        f"#SBATCH --mem={mem}",
-        f"#SBATCH --exclude=dccn-c[046-047,052-054,063,076-085]"
+        f"#SBATCH --mem={mem}"
     ]
 
     if use_gpu:
