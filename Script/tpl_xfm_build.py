@@ -2329,8 +2329,8 @@ def subj_cereb_isolate(pipel_dir, dataset_subs, **kwargs):
         return None
 
 
-def subj_cereb_reslice(transf_type, pipel_dir, dataset_subs, tpl_mov_month, tpl_root,
-                       modalities_dict=None, multi_step=True, **kwargs):
+def subj_cereb_reslice(transf_type, pipel_dir, dataset_subs, tpl_mov_month, tpl_fix_month, 
+                        tpl_root, modalities_dict=None, multi_step=True, **kwargs):
     """
     Reslice each subject's cerebellar mask (T1_Brain_pad_cerebellum_dseg.nii.gz)
     from native space to 216M adult space, using the same transform chain as
@@ -2344,12 +2344,13 @@ def subj_cereb_reslice(transf_type, pipel_dir, dataset_subs, tpl_mov_month, tpl_
         pipel_dir     (str)          : pipeline root directory (…/Data)
         dataset_subs  (pd.DataFrame) : columns ['dataset', 'participant_id']
         tpl_mov_month (str)          : age-matched template month, zero-padded (e.g. '00')
+        tpl_fix_month (str)          : target template month, zero-padded (default '216').
         tpl_root      (str)          : BCP atlas root directory
         modalities_dict (list)       : registration modalities for transform filenames,
                                        default ['T1', 'T1T2']
         multi_step    (bool)         : If True (default), chain through all intermediate
                                        monthly templates (tpl_mov → … → 216), and append
-                                       '_stepwise' to the output filename. If False, use a
+                                       '_multistep' to the output filename. If False, use a
                                        single direct step tpl_mov → 216. Ignored for
                                        transf_type='direct' (always subject → 216 directly).
         kwargs        : num_threads, slurm, verbose, time_limit, mem, dependency_jobid, …
@@ -2363,7 +2364,7 @@ def subj_cereb_reslice(transf_type, pipel_dir, dataset_subs, tpl_mov_month, tpl_
     if modalities_dict is None:
         modalities_dict = ['T1', 'T1T2']
 
-    tpl_fix_month   = '216'
+    # tpl_fix_month   = '216'
     tpl_trans_dir   = f"{tpl_root}/tpl_xfm_build"
     transf_type_str = f"avgsubj_{transf_type}" if transf_type in ("l1o", "30_l1o", "30_all", "all") else transf_type
     if multi_step and transf_type != 'direct':
