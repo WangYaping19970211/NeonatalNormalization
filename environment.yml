@@ -1,0 +1,22 @@
+# Python environment of neonorm: the versions imported in the environment that ran the validation on the BCP data
+# (checked 2026-11-03 with <module>.__version__; SUITPy 2.0.1 is not on PyPI, it is installed from its git commit).
+#   conda env create -f environment.yml && conda activate neonorm   (or Script/setup_neonorm.sh)
+# FSL, FreeSurfer and ANTs are installed separately (README.md).
+name: neonorm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.2
+  - pip
+  - git
+  - pip:
+      - antspyx==0.6.1
+      - SUITPy @ git+https://github.com/DiedrichsenLab/SUITPy.git@11d0849ad7e3d323e5e6ab9a8abcd28c05010c0c
+      - neuroimagingtools==1.1.5
+      - nibabel==5.3.2
+      - typing_extensions==4.15.0  # imported by nibabel 5.3.2, not among its requirements
+      - numpy==2.4.6
+      - pandas==2.3.3
+      - scipy==1.15.3
+      - matplotlib==3.10.8
+      - ipykernel

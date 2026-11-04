@@ -1,28 +1,66 @@
-# Default ignore all
+# Ignore everything, then re-include what is synced to GitHub
 *
-
-# Keep directories so git can descend into them
 !*/
-!.gitignore
-!README.md
-!QC_sickkids/**
 
-# Notebook: only the tutorial
-/Notebook/*
-!/Notebook/SickKids_tutorial.ipynb
+# Top level
+!/.gitignore
+!/README.md
+!/environment.yml
+# QC of the SickKids templates, kept as it is on GitHub for now
+!/QC_sickkids/**
 
-# Script: only these two (pre01_iBEAT is a directory -> re-include its contents)
-/Script/*
-!/Script/pre01_iBEAT
-!/Script/pre01_iBEAT/**
-!/Script/tpl_xfm_build.py
+# Script: the files directly in Script/ (no subfolders), plus what neonorm.py and setup_neonorm.sh read from the
+# repository: Script/data/ and the infant SynthStrip model (not part of FreeSurfer)
+!/Script/*
+/Script/*/
+!/Script/data/
+!/Script/data/*
+!/Script/skullstrip/
+/Script/skullstrip/*
+!/Script/skullstrip/synthstrip/
+/Script/skullstrip/synthstrip/*
+!/Script/skullstrip/synthstrip/model/
+!/Script/skullstrip/synthstrip/model/synthstrip.infant.1.pt
+# not the one-off rename scripts (migrations of existing outputs)
+/Script/rename_*.py
+# not skull_strip.py: the comparison of skull-stripping methods of notebook 2 (not used by neonorm.py; paths of
+# this project)
+/Script/skull_strip.py
 
-# Templates: keep everything under templates/
-!/templates/**
+# Notebook: not on GitHub for now. The project notebooks (BCP, HCPD) show NDA data in their outputs (NDA GUIDs, ages,
+# images of single visits), which must not be redistributed; the public walkthrough is docs/tutorials/.
+/Notebook/
 
-# Ignore temporary files
+# Tutorials: the notebooks of docs/tutorials/, not example/ (BCP and HCPD visits: NDA data, not to be redistributed;
+# also the outputs in example/out/)
+!/docs/tutorials/*.ipynb
+/docs/tutorials/example/
+
+# Templates: the BCP templates (with their cerebellums) and the MNI files; not the tpl2tpl / avgsubj edges
+# (templates/tpl_xfm_build, 16 GB; setup_neonorm.sh copies them with rsync)
+!/templates/BCP-atlas-for_release-Ver2.0.0/**
+# not the SUITPy runs of the templates (cerebellum_suitpy/: runs, json, figure, logs; kept on disk)
+/templates/BCP-atlas-for_release-Ver2.0.0/*/cerebellum_suitpy/**
+# the BCP files neonorm reads (-T1, -Mask, -T1_cerebellum_suitpy_dseg; -T2: bcp_template_cerebellum), not the atlas
+# labels
+/templates/BCP-atlas-for_release-Ver2.0.0/*/*-Parc.nii.gz
+/templates/BCP-atlas-for_release-Ver2.0.0/*/*-Seg*.nii.gz
+/templates/BCP-atlas-for_release-Ver2.0.0/*/*-T1_brain_mask.nii.gz
+!/templates/BCP-atlas-for_release-Ver2.0.0/*/*-T2.nii.gz
+# MNI: only the files neonorm reads (skull-stripped T1w, brain mask, cerebellum mask) and the licence (its copyright
+# notice must go with every copy)
+!/templates/tpl-MNI152NLin2009cSym/tpl-MNI152NLin2009cSym_res-1_desc-brain_T1w.nii.gz
+!/templates/tpl-MNI152NLin2009cSym/tpl-MNI152NLin2009cSym_res-1_desc-brain_mask.nii.gz
+!/templates/tpl-MNI152NLin2009cSym/tpl-MNI152NLin2009cSym_res-1_cerebellum_mask.nii.gz
+!/templates/tpl-MNI152NLin2009cSym/LICENSE
+/templates/tpl_xfm_build/
+
+# Never: macOS metadata, caches, editor files
+._*
+.DS_Store
+__pycache__/
 **/.ipynb_checkpoints/
+*.pyc
 *.swp
 *.swo
 *~
-.DS_Store
