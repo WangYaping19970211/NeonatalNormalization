@@ -1,0 +1,2 @@
+# tutorial notebooks: committed without outputs and without the paths of this computer (Script/notebook_clean_filter.py)
+docs/tutorials/*.ipynb filter=notebook

@@ -25,7 +25,7 @@ thereby enabling more accurate and reliable cross-age comparisons.
 
 `Script/neonorm.py`, one visit at a time, from neonates to adults, with steps optimised for the first months of life (tutorials: `docs/tutorials/1.quickstart_direct_normalize.ipynb`, steps 1-2 for one visit and a dataset, what a site runs on its own data, without waiting for any QC, and SynthStrip only with a manual brain mask compared; `docs/tutorials/1.quickstart_qc.ipynb`, the QC after the registrations, apart from the runs; `docs/tutorials/2.full_pipeline.ipynb`, step 3 after them):
 
-1. **Preprocessing** (`preprocess()`; command line `neonorm.py <t1> <age> <out_dir>`), once per brain mask, in three parts: 1a orientation (`orient`): check whether the T1 (and T2) are in the standard orientation, reorient with `fslreorient2std` if not (temporary files only), with a T2 the rigid T2 on the T1 grid; 1b brain mask: SynthStrip (`synthstrip_age_specific`; below 12 months the union of the default and the infant model, from 12 months the default model) or an own mask (`own_brain_mask`, `--brain_mask`: on the T1 as acquired, reoriented like the T1, made binary); 1c skull stripping + N4 (`head2brain_and_n4correction`) -> `<prefix>_T1w_brain_n4.nii.gz`. No QC in step 1: errors of the brain mask show in the QC of the registrations (`direct_norm_qc`).
+1. **Preprocessing** (`preprocess()`; command line `neonorm.py --preprocess <t1> <age_months> <out_dir> [--t2 <t2>] [--prefix <prefix>] [--brain_mask <own mask>]`; `--preprocess` is optional, step 1 is the default), once per brain mask, in three parts: 1a orientation (`orient`): check whether the T1 (and T2) are in the standard orientation, reorient with `fslreorient2std` if not (temporary files only), with a T2 the rigid T2 on the T1 grid; 1b brain mask: SynthStrip (`synthstrip_age_specific`; below 12 months the union of the default and the infant model, from 12 months the default model) or an own mask (`own_brain_mask`, `--brain_mask`: on the T1 as acquired, reoriented like the T1, made binary); 1c skull stripping + N4 (`head2brain_and_n4correction`) -> `<prefix>_T1w_brain_n4.nii.gz`. No QC in step 1: errors of the brain mask show in the QC of the registrations (`direct_norm_qc`).
 2. **Direct normalisation** — `antsRegistrationSyN.sh` (ANTs, default parameters, T1 only) of the skull-stripped T1 to the age-specific template (UNC BCP 4D atlas, nearest atlas month: 0-12, 15, 18, 21, 24, 36, 48, 60) and directly to MNI space (MNI152NLin2009cSym). Evaluation phase: both for every age (`AGE_TEMPLATE_BELOW_MONTHS = inf`); planned: the age-specific template only below 6 months. `direct_normalize(<prefix>_T1w_brain_n4.nii.gz, ...)`: the registrations of the N4 T1 of step 1. The QC, apart (tutorial: `1.quickstart_qc.ipynb`): `direct_norm_qc(<prefix>_direct_normalize.json)`. Command line: `neonorm.py --direct_normalize <prefix>_T1w_brain_n4.nii.gz ...`, `neonorm.py --direct_norm_qc <json>`; Slurm: `submit_direct_normalize(..., qc=True)` (step 2, then the QC as a dependent job).
 3. **To MNI** — `visit_to_mni()`: the visit to MNI by one way, direct (its MNI registration of step 2) or along a chain of BCP templates (tpl2tpl: template-to-template registrations; avgsubj: the average of the visits' registrations per edge), in three parts: 3a all transforms composed into one field on the MNI grid; 3b the T1, the reference cerebellum and the brain mask moved with it (one interpolation) and its log Jacobian determinant; 3c `mni_metrics` (T1 r, brain and cerebellum Dice and HD95 with MNI, mean log Jacobian). Slurm: `submit_visits_to_mni`.
 
@@ -44,6 +44,7 @@ NeonatalNormalization/
 ├── Script/
 │   ├── neonorm.py                    # The pipeline (command line and Python functions)
 │   ├── setup_neonorm.sh              # One-time setup of a server (environment, ANTs, models, templates, check)
+│   ├── notebook_clean_filter.py      # Git filter: the tutorials are committed without outputs and local paths (set up: see the file)
 │   ├── data/
 │   │   ├── direct_qc_reference.tsv   # Reference of the registration QC of new visits (direct_qc_flags)
 │   │   ├── direct_qc_reference_values.tsv  # Its registrations by age, no IDs (plot_direct_qc_by_age)
@@ -71,12 +72,15 @@ conda env create -f environment.yml
 conda activate neonorm
 ```
 
-All of it on a new server in one go (conda environment, ANTs release binaries, SynthStrip models, templates checked against `Script/data/templates_md5.txt`, a settings file `neonorm_env.sh` to `source`, and the versions compared with the validated ones; FSL and FreeSurfer are set up before):
+All of it on a new server (Linux) or a Mac in one go (conda environment, ANTs release binaries, SynthStrip models, templates checked against `Script/data/templates_md5.txt`, a settings file `neonorm_env.sh` to `source`, and the versions compared with the validated ones; FSL, and FreeSurfer if there, are set up before):
 
 ```bash
-bash Script/setup_neonorm.sh /path/to/toolbox/neonorm user@server:/path/to/NeonatalNormalization/templates
+bash Script/setup_neonorm.sh /path/to/toolbox/neonorm [user@server:/path/to/NeonatalNormalization/templates]
 source /path/to/toolbox/neonorm/neonorm_env.sh
 ```
+
+- Without FreeSurfer (`FREESURFER_HOME` not set, e.g. on a Mac), the script installs `mri_synthstrip` of FreeSurfer 8.0.0 on its own: its script with PyTorch 2.1.2 and surfa 0.6.1, as in FreeSurfer 8.0.0, in the conda environment `neonorm-synthstrip`, and the default model from the SynthStrip website.
+- Without the templates source, it checks the templates of git (BCP, MNI): enough for steps 1-2. Step 3 also needs the tpl2tpl and avgsubj edges (`templates/tpl_xfm_build/`, 16 GB, not in git), copied from a computer that has them.
 
 ### Settings for your computer
 
@@ -108,7 +112,7 @@ python Script/neonorm.py --check
 ### Usage
 
 ```bash
-python Script/neonorm.py sub-001_T1w.nii.gz 4.5 out/sub-001 --t2 sub-001_T2w.nii.gz
+python Script/neonorm.py --preprocess sub-001_T1w.nii.gz 4.5 out/sub-001 --t2 sub-001_T2w.nii.gz
 ```
 
 `age_months` is the age at scan in months (it chooses the SynthStrip models and the BCP templates). Options: `--prefix` (file name prefix, default: the T1 file name without `_T1w.nii.gz`), `--brain_mask <own mask>` (an own brain mask on the T1 as acquired instead of SynthStrip; give the run its own prefix, e.g. `<id>_manual_mask`: it reuses the rigid T2 of the SynthStrip run of the visit, if there is one). For a postmenstrual age in weeks, `neonorm.age_months_from_pma(pma_weeks)` gives the age after term in months (0 before 40 weeks). On a Slurm cluster, `submit_preprocess_array(runs, run_dir, setup=setup)` submits step 1 of many runs (one dict per run with the arguments of `preprocess`) as one job array `prep` (2 CPUs, 24 GB per task, `PREPROCESS_JOB`); per run the job script and its full output in `<out_dir>/log/<prefix>_preprocess.sh` / `.out`.

@@ -54,7 +54,8 @@ environment variables, then the defaults below:
 Check the setup with:  python neonorm.py --check
 
 Usage:
-    python neonorm.py <t1> <age_months> <out_dir> [--t2 <t2>] [--prefix <prefix>] [--brain_mask <own mask>]  (step 1)
+    python neonorm.py --preprocess <t1> <age_months> <out_dir> [--t2 <t2>] [--prefix <prefix>] [--brain_mask <mask>]
+                                                                     (step 1; --preprocess optional: the default)
     python neonorm.py --direct_normalize <prefix>_T1w_brain_n4.nii.gz <age_months> [<out_dir>] [--prefix <prefix>]
                       [--templates ...] [--bcp_templates <dir>] [--mni_template <dir>]                   (step 2)    
     python neonorm.py --direct_norm_qc <out_dir>/<prefix>_direct_normalize.json                         (QC)    
@@ -1218,11 +1219,12 @@ PREPROCESS_JOB = {'cpus': 2, 'mem': '24G', 'time': '01:00:00'}  # Slurm resource
 def preprocess_job_script(t1, age_months, out_dir, t2=None, prefix=None, brain_mask=None, setup=''):
     """Write, without submitting, the Slurm job script of step 1 (preprocess) of one run: <out_dir>/log/
     <prefix>_preprocess.sh (job <number>_prep, PREPROCESS_JOB; output <prefix>_preprocess.out); it runs `python
-    neonorm.py <t1> <age_months> <out_dir> --prefix <prefix>` (and --t2, --brain_mask). Arguments as preprocess.
+    neonorm.py --preprocess <t1> <age_months> <out_dir> --prefix <prefix>` (and --t2, --brain_mask). Arguments as
+    preprocess.
     Returns {'prefix', 'age_months', 't1', 't2', 'brain_mask', 'out_dir', 'script', 'log'}."""
     prefix = prefix or default_prefix(t1)
     out_dir, log_dir = Path(out_dir), Path(out_dir) / 'log'
-    cmd = ['python', Path(__file__).resolve(), t1, age_months, out_dir, '--prefix', prefix] + \
+    cmd = ['python', Path(__file__).resolve(), '--preprocess', t1, age_months, out_dir, '--prefix', prefix] + \
           (['--t2', t2] if t2 else []) + (['--brain_mask', brain_mask] if brain_mask else [])
     script = _job_script(f"{prefix.replace('sub-', '')}_prep", f'{prefix}_preprocess', log_dir, [cmd], setup,
                          **PREPROCESS_JOB)
@@ -2321,8 +2323,9 @@ def submit_edge_bias(edges, ways, out_dir, xfm_root, setup=''):
 
 def main():
     p = argparse.ArgumentParser(description='neonorm for one visit: step 1 (preprocessing: orientation, brain mask, '
-                                            'skull stripping + N4), or step 2 (direct normalisation) with '
-                                            '--direct_normalize, or its QC with --direct_norm_qc')
+                                            'skull stripping + N4) with --preprocess (the default), or step 2 '
+                                            '(direct normalisation) with --direct_normalize, or its QC with '
+                                            '--direct_norm_qc')
     p.add_argument('--check', action='store_true', help='check the software setup and exit')
     p.add_argument('t1', nargs='?', help='step 1: the T1 as acquired; step 2: <prefix>_T1w_brain_n4.nii.gz of step 1')
     p.add_argument('age_months', nargs='?', type=float, help='age at scan in months')
@@ -2333,6 +2336,8 @@ def main():
                                     '_T1w_brain_n4.nii.gz)')
     p.add_argument('--brain_mask', help='step 1: an own brain mask on the T1 as acquired instead of SynthStrip; step 2: '
                                         'recorded for the QC (default: the mask of <prefix>_preprocess.json)')
+    p.add_argument('--preprocess', action='store_true',
+                   help='step 1: t1 = the T1 as acquired (also the default without --direct_normalize / --direct_norm_qc)')
     p.add_argument('--direct_normalize', action='store_true',
                    help='step 2 instead of step 1: t1 = <prefix>_T1w_brain_n4.nii.gz of step 1; out_dir optional '
                         '(default: the folder of t1)')
@@ -2368,6 +2373,8 @@ def main():
         problems = check_environment(verbose=True)
         print('\nready' if not problems else '\nnot ready:\n  - ' + '\n  - '.join(problems))
         sys.exit(1 if problems else 0)
+    if a.preprocess and (a.direct_normalize or a.direct_norm_qc):
+        p.error('--preprocess (step 1) goes with neither --direct_normalize nor --direct_norm_qc')
     if a.direct_norm_qc:
         q = direct_norm_qc(a.direct_norm_qc)
         _section('done: --direct_norm_qc')

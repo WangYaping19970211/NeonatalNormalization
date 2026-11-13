@@ -4,18 +4,21 @@
 
 # Top level
 !/.gitignore
+!/.gitattributes
 !/README.md
 !/environment.yml
 # QC of the SickKids templates, kept as it is on GitHub for now
 !/QC_sickkids/**
 
-# Script: only neonorm.py and setup_neonorm.sh (not the tests and helper scripts of the project), plus what they read
+# Script: only neonorm.py, setup_neonorm.sh and notebook_clean_filter.py (the git filter of the tutorials; not the
+# tests and helper scripts of the project), plus what they read
 # from the repository: Script/data/templates_md5.txt (setup_neonorm.sh checks the templates), Script/data/
 # direct_qc_reference.tsv (neonorm.direct_qc_flags), Script/data/direct_qc_reference_values.tsv
 # (neonorm.plot_direct_qc_by_age) and the infant SynthStrip model (not part of FreeSurfer)
 /Script/*
 !/Script/neonorm.py
 !/Script/setup_neonorm.sh
+!/Script/notebook_clean_filter.py
 !/Script/data/
 /Script/data/*
 !/Script/data/templates_md5.txt
