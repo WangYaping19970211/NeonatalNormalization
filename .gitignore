@@ -9,32 +9,37 @@
 # QC of the SickKids templates, kept as it is on GitHub for now
 !/QC_sickkids/**
 
-# Script: the files directly in Script/ (no subfolders), plus what neonorm.py and setup_neonorm.sh read from the
-# repository: Script/data/ and the infant SynthStrip model (not part of FreeSurfer)
-!/Script/*
-/Script/*/
+# Script: only neonorm.py and setup_neonorm.sh (not the tests and helper scripts of the project), plus what they read
+# from the repository: Script/data/templates_md5.txt (setup_neonorm.sh checks the templates), Script/data/
+# direct_qc_reference.tsv (neonorm.direct_qc_flags), Script/data/direct_qc_reference_values.tsv
+# (neonorm.plot_direct_qc_by_age) and the infant SynthStrip model (not part of FreeSurfer)
+/Script/*
+!/Script/neonorm.py
+!/Script/setup_neonorm.sh
 !/Script/data/
-!/Script/data/*
+/Script/data/*
+!/Script/data/templates_md5.txt
+!/Script/data/direct_qc_reference.tsv
+!/Script/data/direct_qc_reference_values.tsv
 !/Script/skullstrip/
 /Script/skullstrip/*
 !/Script/skullstrip/synthstrip/
 /Script/skullstrip/synthstrip/*
 !/Script/skullstrip/synthstrip/model/
 !/Script/skullstrip/synthstrip/model/synthstrip.infant.1.pt
-# not the one-off rename scripts (migrations of existing outputs)
-/Script/rename_*.py
-# not skull_strip.py: the comparison of skull-stripping methods of notebook 2 (not used by neonorm.py; paths of
-# this project)
-/Script/skull_strip.py
 
 # Notebook: not on GitHub for now. The project notebooks (BCP, HCPD) show NDA data in their outputs (NDA GUIDs, ages,
 # images of single visits), which must not be redistributed; the public walkthrough is docs/tutorials/.
 /Notebook/
 
-# Tutorials: the notebooks of docs/tutorials/, not example/ (BCP and HCPD visits: NDA data, not to be redistributed;
-# also the outputs in example/out/)
+# Tutorials: the notebooks of docs/tutorials/ and the example visits of example/ (two infants of the open Baby Open
+# Brains dataset, CC-BY-4.0: images, a manual brain mask, table, README with source and citation), not the files the tutorials make
+# (example/out/ and anything else)
 !/docs/tutorials/*.ipynb
-/docs/tutorials/example/
+!/docs/tutorials/example/README.md
+!/docs/tutorials/example/participants.tsv
+!/docs/tutorials/example/sub-ex0[12]_T[12]w.nii.gz
+!/docs/tutorials/example/sub-ex01_T1w_manual_mask.nii.gz
 
 # Templates: the BCP templates (with their cerebellums) and the MNI files; not the tpl2tpl / avgsubj edges
 # (templates/tpl_xfm_build, 16 GB; setup_neonorm.sh copies them with rsync)

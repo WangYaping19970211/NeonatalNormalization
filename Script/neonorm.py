@@ -2,29 +2,34 @@
 life; one visit at a time.
 
 Steps of the pipeline (each returns a dict of the files it wrote):
-    1. preprocess(t1, age_months, out_dir, t2)   preprocessing in three parts, writes <prefix>_preprocess.json:
-       1a orient                                 check the orientation; reorient with fslreorient2std if needed
-       1b skull_strip_step                       SynthStrip brain mask (< 12 months: default OR infant model; from 12
-                                                 months: default model); with a T2: rigid T2 on the T1 grid
-       1c skull_strip_step (qc=True)             automatic QC: SUITPy cerebellum (twice) inside the mask, brain volume
-                                                 for the age
-    2. direct_normalize(t1, age_months, brain_mask, out_dir, t2, prefix, steps=(1, 2, 3))
-                                                 direct normalisation in three parts (`steps` 1, 2, 3 = parts 2a, 2b,
-                                                 2c; any of them can be run alone): the visit registered to each
-                                                 template itself (indirect normalisation through chains of templates,
-                                                 tpl2tpl / avgsubj: see the section 'Indirect normalisation')
-       2a head2brain_and_n4correction            skull stripping + N4BiasFieldCorrection inside the brain mask of the
-                                                 T1 and, if given, of the T2 on the T1 grid (rigid T2 of step 1) (saved)
-       2b register_to_template                   antsRegistrationSyN.sh (ANTs, default parameters, T1 only for now; a
-                                                 T1 + T2 normalisation may follow) of the skull-stripped T1 to every
+    1. preprocess(t1, age_months, out_dir, t2, prefix, brain_mask)
+                                                 preprocessing in three parts, once per brain mask, writes
+                                                 <prefix>_preprocess.json (no QC here: the QC of steps 1-2 is direct_norm_qc):
+       1a orient                                 the T1 (and T2) in the standard orientation (fslreorient2std,
+                                                 temporary copies only); with a T2: the rigid T2 on the T1 grid
+                                                 (saved; reused by another run of the visit with the same images)
+       1b synthstrip_age_specific / own_brain_mask
+                                                 SynthStrip brain mask (< 12 months: default OR infant model; from 12
+                                                 months: default model), or an own mask (e.g. drawn by hand on the T1
+                                                 as acquired: reoriented like the T1, made binary)
+       1c head2brain_and_n4correction            skull stripping + N4BiasFieldCorrection inside the brain mask of the
+                                                 T1 and, if given, of the rigid T2 -> <prefix>_T1w_brain_n4.nii.gz
+       submit_preprocess_array(runs, run_dir) submits step 1 of many runs as one Slurm job array
+    2. direct_normalize(t1_brain, age_months, out_dir, prefix)
+                                                 direct normalisation: the visit registered to each template itself
+                                                 (indirect normalisation through chains of templates, tpl2tpl /
+                                                 avgsubj: see 'Indirect normalisation'):
+       register_to_template                      antsRegistrationSyN.sh (ANTs, default parameters, T1 only for now; a
+                                                 T1 + T2 normalisation may follow) of the N4 T1 of step 1 to every
                                                  template of normalization_targets(age_months)
                                                  (BCP template of the nearest atlas month and MNI; evaluation phase:
                                                  every age, planned: below 6 months, MNI only from 6 months)
-       2c direct_normalization_qc                QC: the reference cerebellum of the visit (brain_to_cerebellum: SUITPy
-                                                 on the skull-stripped T1 + T2 + brain mask, medoid of 2-3 runs; made
-                                                 if missing), correlation, brain and cerebellum Dice, cerebellum HD95,
-                                                 Jacobian, figures
-       submit_direct_normalize() submits 2a-2b and 2c as two Slurm jobs (the QC after the registrations).
+       submit_direct_normalize(...) submits step 2 as a Slurm job (with qc=True also the QC, a second job after it)
+    QC. direct_norm_qc(normalize_json)           the QC of steps 1-2, apart from the pipeline (tutorial:
+                                                 1.quickstart_qc.ipynb): the reference cerebellum of the visit
+                                                 (brain_to_cerebellum: SUITPy on the skull-stripped T1 + T2 + brain
+                                                 mask, medoid of 2-3 runs; made if missing); per template correlation,
+                                                 brain and cerebellum Dice and HD95, Jacobian, figures
     3. visit_to_mni(normalize_json, way, path)   the visit to MNI by one way (direct, or along a chain of templates:
                                                  tpl2tpl / avgsubj), in three parts (submit_visits_to_mni):
        3a                                        all transforms of the way composed into one field on the MNI grid
@@ -34,7 +39,7 @@ Steps of the pipeline (each returns a dict of the files it wrote):
                                                  share of folded voxels (evaluation figure: plot_by_month)
 
 Software (see README.md): FSL (fslreorient2std), FreeSurfer (mri_synthstrip) with the SynthStrip default and infant
-models, ANTs (antsRegistrationSyN.sh, N4BiasFieldCorrection, ImageMath; steps 2-3) and the Python packages of
+models, ANTs (antsRegistrationSyN.sh, N4BiasFieldCorrection, ImageMath; steps 1c-3) and the Python packages of
 environment.yml (ANTsPy, SUITPy, ...). Settings that depend on the computer are read from the command line, then from
 environment variables, then the defaults below:
     FSLDIR                          FSL installation (or fslreorient2std on the PATH)
@@ -49,10 +54,10 @@ environment variables, then the defaults below:
 Check the setup with:  python neonorm.py --check
 
 Usage:
-    python neonorm.py <t1> <age_months> <out_dir> [--t2 <t2>] [--prefix <prefix>] [--save_brain] [--qc_figure]  (step 1)
-    python neonorm.py --direct_normalize <t1> <age_months> [<out_dir>] --brain_mask <mask> [--t2 <T2 on the T1 grid>]
-                      [--prefix <prefix>] [--steps 1 2 3] [--bcp_templates <dir>] [--mni_template <dir>]    (step 2;
-                      --steps: parts 2a 2b 2c)
+    python neonorm.py <t1> <age_months> <out_dir> [--t2 <t2>] [--prefix <prefix>] [--brain_mask <own mask>]  (step 1)
+    python neonorm.py --direct_normalize <prefix>_T1w_brain_n4.nii.gz <age_months> [<out_dir>] [--prefix <prefix>]
+                      [--templates ...] [--bcp_templates <dir>] [--mni_template <dir>]                   (step 2)    
+    python neonorm.py --direct_norm_qc <out_dir>/<prefix>_direct_normalize.json                         (QC)    
 """
 import argparse
 import hashlib
@@ -73,14 +78,21 @@ import pandas as pd
 __version__ = '0.1.0'
 
 HERE = Path(__file__).resolve().parent
-# Brain volume (SynthStrip default model) per age bin of the BCP visits; median and robust SD, no individual data
-VOLUME_NORMS = HERE / 'data' / 'bcp_synthstrip_volume_by_age.tsv'
 SYNTHSTRIP_MODELS = {'synthstrip': 'synthstrip.1.pt', 'synthstrip_infant': 'synthstrip.infant.1.pt'}
 UNION_BELOW_MONTHS = 12  # brain mask: synthstrip OR synthstrip_infant below, synthstrip (default model) from here on
-COV_MIN = 0.95           # QC: share of the SUITPy cerebellum inside the brain mask
-DICE_MIN = 0.95          # QC: agreement of the two SUITPy runs (SUITPy is not deterministic and can misplace the cerebellum)
-Z_MAX = 3                # QC: |robust z| of the SynthStrip volume within the age bin
-CEREB_DICE_MIN = 0.90    # QC of 2c: below this cerebellum Dice with the main template, needs_visual_check (provisional)
+DICE_MIN = 0.95          # QC: agreement of two SUITPy runs (SUITPy is not deterministic and can misplace the cerebellum)
+CEREB_DICE_MIN = 0.90    # QC (direct_norm_qc): below this cerebellum Dice with the main template, needs_visual_check (provisional)
+# Flags of the registrations of new visits (direct_qc_flags) against the QC of this project: per group (BCP template;
+# MNI by age group) median and robust scale of the registrations that passed the visual QC (notebooks 3, 5; made by
+# Script/make_direct_qc_reference.py of the project, not in the repository)
+DIRECT_QC_REFERENCE = HERE / 'data' / 'direct_qc_reference.tsv'
+# the values of these registrations (role nearest: to the nearest BCP template; MNI; age and metrics, no IDs) for
+# plot_direct_qc_by_age
+DIRECT_QC_VALUES = HERE / 'data' / 'direct_qc_reference_values.tsv'
+DIRECT_QC_CHECKS = {'t1_corr': -1, 'brain_log10_hd95': 1, 'cerebellum_log10_hd95': 1}  # sign: 1 = high is worse
+REVIEW_Z = 3             # flag: robust z beyond this in the worse direction (T1 r: z < -3; log10 HD95: z > 3)
+HD95_MIN_EXCESS_MM = {'BCP': 2.4, 'MNI': 3.0}  # HD95 flags also this far above the median: 3 voxels of the template
+MNI_T1R_MIN = 0.5        # flag: T1 r with MNI below this (bimodal, no value 0.26-0.50 in the project: likely failed)
 # Normalisation: BCP template of the nearest atlas month and MNI below this age, MNI only from it on. Evaluation phase:
 # every age (inf); planned: 6.
 AGE_TEMPLATE_BELOW_MONTHS = float('inf')
@@ -261,6 +273,13 @@ def direct_templates(age_months, bcp_dir=None):
     return list(dict.fromkeys(names + [MNI_NAME]))
 
 
+def age_months_from_pma(pma_weeks, term_weeks=40):
+    """age_months of neonorm from the postmenstrual age at scan (weeks): the age after term, (PMA - term_weeks) x 7 /
+    30.4375 days (as the BCP and dHCP ages, notebook 1), 0 before term (BCP00M is the youngest template, so a preterm
+    visit before term is registered to BCP00M and BCP01M by direct_templates). Scalar or array."""
+    return np.maximum(0, (np.asarray(pma_weeks, dtype=float) - term_weeks) * 7 / 30.4375)
+
+
 def _find_up(path, rel):
     """First parent folder of `path` that contains `rel` (e.g. 'etc/fslversion'); None if none does."""
     for d in Path(path).resolve().parents:
@@ -331,8 +350,6 @@ def check_environment(need_infant=True, need_ants=True, verbose=False):
             package_version(p)
         except PackageNotFoundError:
             problems.append(f'Python package {p} missing: create the environment of environment.yml')
-    if not VOLUME_NORMS.exists():
-        problems.append(f'{VOLUME_NORMS} missing (part of the repository)')
     if verbose:
         for k, v in environment_info().items():
             print(f'{k:28s} {v}')
@@ -387,7 +404,7 @@ def _as_3d(img):
 
 def suitpy_cerebellum(t1, out_dseg, t2=None, brain_mask=None):
     """SUITPy isolate() on the T1, optionally with a T2 on the T1 grid and a brain mask: the one SUITPy call of the project
-    (whole head: skull_strip_step and skull_strip.head_to_cerebellum; skull-stripped: brain_to_cerebellum; templates:
+    (whole head: synthstrip_age_specific and skull_strip.head_to_cerebellum; skull-stripped: brain_to_cerebellum; templates:
     bcp_template_cerebellum). Returns out_dseg, or None if SUITPy finds no cerebellum."""
     import ants
     import SUITPy as suit
@@ -437,16 +454,64 @@ def default_prefix(t1):
 
 
 # ---------------------------------------------------------------------------
-# Step 1 (preprocessing), 1a: orientation
+# Step 1 (preprocessing): 1a orientation, 1b brain mask, 1c skull stripping + N4 (head2brain_and_n4correction, below)
 # ---------------------------------------------------------------------------
 
-def orient(t1, t2=None, out_dir='.', prefix=None):
-    """Part 1a of the preprocessing, orientation. Images already in the standard (fslreorient2std) orientation are used as they are (no copy); others are
-    reoriented to <prefix>_<T1w|T2w>_reorient.nii.gz in out_dir (lossless axis permutation / flip, world coordinates
-    unchanged). Returns {'t1': path to use, 't2': path to use or None, 't1_reoriented': bool, 't2_reoriented': bool}."""
+def _same_grid(a, b):
+    a, b = nib.load(a), nib.load(b)
+    return a.shape[:3] == b.shape[:3] and np.allclose(a.affine, b.affine, atol=1e-3)
+
+
+def _newer(out, src):
+    """True if out exists and is not older than src (made from it before, so it can be reused)."""
+    out = Path(out)
+    return out.exists() and out.stat().st_mtime >= Path(src).stat().st_mtime
+
+
+def rigid_t2_to_t1(t1, t2, out_dir, prefix):
+    """The T2 registered rigidly to the T1 (ANTsPy, whole head; part of 1a), on the T1 grid:
+    <prefix>_T2w_rigid2T1.nii.gz and its transform <prefix>_T2w_rigid2T1_0GenericAffine.mat. Returns
+    {'t2_to_t1_transform', 't2_on_t1'}."""
+    import ants
+    out_dir = Path(out_dir)
+    if n_threads():
+        os.environ.setdefault('ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', str(n_threads()))  # ANTs threads
+    t1_img = _as_3d(ants.image_read(str(t1)))
+    reg = ants.registration(fixed=t1_img, moving=_as_3d(ants.image_read(str(t2))), type_of_transform='Rigid')
+    res = {'t2_to_t1_transform': str(out_dir / f'{prefix}_T2w_rigid2T1_0GenericAffine.mat')}
+    shutil.copy(reg['fwdtransforms'][0], res['t2_to_t1_transform'])
+    res['t2_on_t1'] = str(out_dir / f'{prefix}_T2w_rigid2T1.nii.gz')
+    ants.image_write(reg['warpedmovout'], res['t2_on_t1'])
+    return res
+
+
+def _rigid_t2_of_visit(out_dir, t1, t2):
+    """The rigid T2 of an earlier run of step 1 in out_dir with the same T1 and T2 (e.g. the SynthStrip run, for a run
+    with an own mask): (its preprocess.json, its 'orient'), or None. It is reused only if it is not older than the T2."""
+    for f in sorted(Path(out_dir).glob('*_preprocess.json')):
+        log = json.loads(f.read_text())
+        o = log.get('orient', {})
+        if (log.get('inputs', {}).get('t1') == str(t1) and log['inputs'].get('t2') == str(t2) and o.get('t2_on_t1')
+                and _newer(o['t2_on_t1'], t2)):
+            return f, o
+    return None
+
+
+def orient(t1, t2=None, out_dir='.', prefix=None, tmp_dir=None):
+    """Part 1a of the preprocessing, orientation, and the T2 onto the T1. Images already in the standard
+    (fslreorient2std) orientation are used as they are; others are reoriented (lossless axis permutation / flip, world
+    coordinates unchanged) to <prefix>_<T1w|T2w>_reorient.nii.gz in tmp_dir (preprocess: a temporary folder, as only 1b
+    and 1c use them; default out_dir). With a T2, it is then registered rigidly to the T1 (whole head, rigid_t2_to_t1)
+    and saved on the T1 grid in out_dir, <prefix>_T2w_rigid2T1.nii.gz, with its transform; the rigid T2 of an earlier run
+    of step 1 of the visit with the same T1 and T2 (another prefix, e.g. the SynthStrip run for a run with an own mask;
+    _rigid_t2_of_visit) is reused instead, so that the runs of a visit differ in the brain mask only. Returns {'t1':
+    path to use, 't2': path to use or None, 't1_reoriented': bool, 't2_reoriented': bool; with a T2 also
+    't2_to_t1_transform', 't2_on_t1', 't2_rigid_from' (the preprocess.json whose rigid T2 is reused, or None)}.
+    Until 2026-11-12 the reoriented images were kept in out_dir, and before that day the rigid T2 was part of 1b."""
     prefix = prefix or default_prefix(t1)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = Path(tmp_dir) if tmp_dir else out_dir
     res = {}
     for mod, img in (('t1', t1), ('t2', t2)):
         if img is None:
@@ -454,23 +519,16 @@ def orient(t1, t2=None, out_dir='.', prefix=None):
         elif is_standard_orientation(img):
             res[mod], res[f'{mod}_reoriented'] = str(img), False
         else:
-            dst = out_dir / f'{prefix}_{mod.upper()}w_reorient.nii.gz'
+            dst = tmp_dir / f'{prefix}_{mod.upper()}w_reorient.nii.gz'
             reorient(img, dst)
             res[mod], res[f'{mod}_reoriented'] = str(dst), True
+    if res['t2'] is not None:
+        earlier = _rigid_t2_of_visit(out_dir, t1, t2)
+        if earlier and _same_grid(earlier[1]['t2_on_t1'], res['t1']):
+            res.update({k: earlier[1].get(k) for k in ('t2_to_t1_transform', 't2_on_t1')}, t2_rigid_from=str(earlier[0]))
+        else:
+            res.update(rigid_t2_to_t1(res['t1'], res['t2'], out_dir, prefix), t2_rigid_from=None)
     return res
-
-
-# ---------------------------------------------------------------------------
-# Step 1 (preprocessing), 1b-1c: skull stripping and QC
-# ---------------------------------------------------------------------------
-
-def _save_masked(image, mask, out):
-    img = nib.load(image)
-    data = np.squeeze(np.asanyarray(img.dataobj)) * mask
-    out_img = nib.Nifti1Image(data.astype(np.float32), img.affine, img.header)
-    out_img.set_data_dtype(np.float32)
-    nib.save(out_img, out)
-    return str(out)
 
 
 def brain_mask_methods(age_months):
@@ -486,73 +544,19 @@ def save_union_mask(mask_files, out_file):
     return str(out_file)
 
 
-def volume_z(volume_mm3, age_months, norms=VOLUME_NORMS):
-    """Robust z of a SynthStrip (default model) brain volume within its BCP age bin; (z, bin label, bin median)."""
-    t = pd.read_csv(norms, sep='\t', index_col='age_bin_months')
-    for label, r in t.iterrows():
-        lo, hi = (float(label[:-1]), np.inf) if label.endswith('+') else map(float, label.split('-'))
-        if lo <= age_months < hi:
-            return (volume_mm3 - r['median_mm3']) / r['robust_sd_mm3'], label, r['median_mm3']
-    return np.nan, '', np.nan
-
-
-def qc_figure(t1, masks, cerebs, out_png, text):
-    """T1 with the SynthStrip masks (lines) and the two SUITPy cerebellum runs (run 1 filled, run 2 dashed), through the
-    brain centre and the cerebellum; the QC result above the images."""
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    colors = {'synthstrip': '#a80000', 'synthstrip_infant': '#ff2a2a', 'brain mask': '#ffa899'}
-    img = np.squeeze(np.asanyarray(nib.load(t1).dataobj)).astype(float)
-    centres = [('brain centre', np.round(np.mean(np.nonzero(masks['brain mask']), axis=1)).astype(int))]
-    if cerebs[0].any():
-        centres.append(('cerebellum', np.round(np.mean(np.nonzero(cerebs[0]), axis=1)).astype(int)))
-    fig, axes = plt.subplots(len(centres), 3, figsize=(12, 4 * len(centres)), squeeze=False)
-    vmax = np.percentile(img[img > 0], 99)
-    for row, (label, c) in zip(axes, centres):
-        for axis, ax in enumerate(row):
-            sl = lambda v: np.take(v, c[axis], axis=axis).T
-            ax.imshow(sl(img), cmap='gray', vmin=0, vmax=vmax, origin='lower')
-            ax.contourf(sl(cerebs[0]).astype(float), levels=[0.5, 1.5], colors=['#1baf7a'], alpha=0.3)
-            ax.contour(sl(cerebs[1]).astype(float), levels=[0.5], colors='#e4572e', linestyles='--', linewidths=1.2)
-            for k, m in masks.items():
-                ax.contour(sl(m).astype(float), levels=[0.5], colors=colors[k], linewidths=1.2)
-            ax.axis('off')
-        row[0].set_title(label, fontsize=9, loc='left')
-    fig.legend(handles=[plt.Line2D([], [], color=colors[k], lw=2, label=k) for k in masks]
-               + [plt.Line2D([], [], color='#1baf7a', lw=6, alpha=0.4, label='SUITPy cerebellum, run 1'),
-                  plt.Line2D([], [], color='#e4572e', ls='--', lw=2, label='SUITPy cerebellum, run 2')],
-               loc='lower center', ncol=len(masks) + 2, frameon=False, fontsize=9)
-    fig.suptitle(text, fontsize=9, ha='left', x=0.02)
-    fig.tight_layout(rect=(0, 0.05, 1, 0.9))
-    fig.savefig(out_png, dpi=110)
-    plt.close(fig)
-    return str(out_png)
-
-
-def skull_strip_step(t1, age_months, t2=None, out_dir='.', prefix=None, t1_brain=None, save_brain=False,
-                     qc=True, always_qc_figure=False):
-    """Parts 1b (skull stripping, rigid T2) and 1c (QC, if qc) of the preprocessing. t1 / t2: images of orient (not
-    skull-stripped). Brain mask from SynthStrip: below UNION_BELOW_MONTHS
-    the default model OR the infant model (the infant model alone excludes extra-axial CSF; the union keeps the
-    cerebellum where the default model cuts it), from UNION_BELOW_MONTHS on the default model. With a T2, it is
-    registered rigidly to the T1 (whole head) and saved on the T1 grid, <prefix>_T2w_rigid2T1.nii.gz (the T2 input of
-    step 2), with its transform. QC, no visual QC of the images needed:
-      - SUITPy cerebellum (T1, not skull-stripped) run twice: flag if the runs differ (Dice < DICE_MIN), else if less
-        than COV_MIN of it lies inside the brain mask;
-      - volume: robust z of the SynthStrip (default model) volume within the BCP age bin, flag |z| > Z_MAX.
-    A flagged visit needs a look at <prefix>_skullstrip_qc.png. Returns a dict of the outputs and the QC result."""
-    import ants
+def synthstrip_age_specific(t1, age_months, out_dir='.', prefix=None):
+    """Part 1b of the preprocessing, SynthStrip. t1: the T1 of orient (not skull-stripped). Brain mask from SynthStrip:
+    below UNION_BELOW_MONTHS the default model OR the infant model (the infant model alone excludes extra-axial CSF; the
+    union keeps the cerebellum where the default model cuts it), from UNION_BELOW_MONTHS on the default model,
+    <prefix>_T1w_brain_mask.nii.gz. Its QC is part of direct_norm_qc. Returns {'age_months', 'brain_mask_rule',
+    'brain_mask'}."""
     prefix = prefix or default_prefix(t1)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if n_threads():
-        os.environ.setdefault('ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', str(n_threads()))  # ANTs threads
     res = {'age_months': float(age_months)}
     with tempfile.TemporaryDirectory() as tmp:
-        methods = brain_mask_methods(age_months)
         masks = {}
-        for m in methods:
+        for m in brain_mask_methods(age_months):
             f = os.path.join(tmp, f'{m}_mask.nii.gz')
             synthstrip(t1, f, m)
             masks[m] = _load_bool(f)
@@ -561,51 +565,30 @@ def skull_strip_step(t1, age_months, t2=None, out_dir='.', prefix=None, t1_brain
         res['brain_mask_rule'] = 'synthstrip OR synthstrip_infant' if len(masks) > 1 else 'synthstrip'
         res['brain_mask'] = str(out_dir / f'{prefix}_T1w_brain_mask.nii.gz')
         nib.save(nib.Nifti1Image(brain.astype(np.uint8), ref.affine, ref.header), res['brain_mask'])
-        if save_brain or t1_brain:
-            res['t1_brain'] = _save_masked(t1, brain, t1_brain or out_dir / f'{prefix}_T1w_brain.nii.gz')
+    return res
 
-        if t2 is not None:
-            t1_img = _as_3d(ants.image_read(str(t1)))
-            reg = ants.registration(fixed=t1_img, moving=_as_3d(ants.image_read(str(t2))), type_of_transform='Rigid')
-            res['t2_to_t1_transform'] = str(out_dir / f'{prefix}_T2w_rigid2T1_0GenericAffine.mat')
-            shutil.copy(reg['fwdtransforms'][0], res['t2_to_t1_transform'])
-            res['t2_on_t1'] = str(out_dir / f'{prefix}_T2w_rigid2T1.nii.gz')
-            ants.image_write(reg['warpedmovout'], res['t2_on_t1'])
-            if save_brain:
-                res['t2_brain'] = _save_masked(res['t2_on_t1'], brain, out_dir / f'{prefix}_T2w_brain.nii.gz')
 
-        if qc:
-            vox = float(np.prod(ref.header.get_zooms()[:3]))  # mm3 per voxel
-            cerebs = []
-            for run in (1, 2):
-                f = os.path.join(tmp, f'cerebellum_run{run}.nii.gz')
-                suitpy_cerebellum(t1, f)
-                cerebs.append(_load_bool(f))
-            agree = float(_dice(*cerebs)) if cerebs[0].any() or cerebs[1].any() else np.nan
-            coverage = [float((c & brain).sum() / c.sum()) if c.any() else np.nan for c in cerebs]
-            vol = float(masks['synthstrip'].sum()) * vox
-            z, age_bin, median = volume_z(vol, age_months)
-            flags = []
-            if not agree >= DICE_MIN:
-                flags.append(f'cerebellum: the two SUITPy runs differ (Dice {agree:.3f}), the cerebellum check may be '
-                             f'unreliable -> check the cerebellum in the figure; inside the brain mask: run 1 '
-                             f'{coverage[0]:.0%}, run 2 {coverage[1]:.0%}')
-            elif not min(coverage) >= COV_MIN:
-                flags.append(f'cerebellum: only {min(coverage):.0%} of the SUITPy cerebellum inside the brain mask -> does '
-                             'the mask cut the cerebellum?')
-            if abs(z) > Z_MAX:
-                flags.append(f'volume: synthstrip {vol:,.0f} mm3, z = {z:+.1f} vs the BCP median of {age_bin} months '
-                             f'({median:,.0f} mm3) -> ' + ('non-brain included, or older than the age' if z > 0
-                                                         else 'brain cut off, or younger than the age'))
-            res['qc'] = {'suitpy_runs_dice': agree, 'cereb_coverage_run1': coverage[0], 'cereb_coverage_run2': coverage[1],
-                         'synthstrip_volume_mm3': vol, 'volume_z': float(z), 'age_bin': age_bin, 'flags': flags,
-                         'needs_visual_check': bool(flags)}
-            if flags or always_qc_figure:
-                text = (f'{prefix} | age {age_months:.1f} months | brain mask: {res["brain_mask_rule"]}\n'
-                        + ('\n'.join(flags) if flags else
-                           f'QC passed: SUITPy runs Dice {agree:.3f}, cerebellum coverage {min(coverage):.0%}, volume z {z:+.1f}'))
-                res['qc_figure'] = qc_figure(t1, {**masks, 'brain mask': brain}, cerebs,
-                                             out_dir / f'{prefix}_skullstrip_qc.png', text)
+def own_brain_mask(brain_mask, t1, out_dir='.', prefix=None):
+    """Part 1b of the preprocessing with an own brain mask instead of SynthStrip (e.g. drawn or corrected by hand on the
+    T1 as acquired). t1: the T1 of orient. The mask, if not in the standard orientation, is reoriented like the T1
+    (fslreorient2std); it must then be on the grid of t1 (no resampling here); binary, every non-zero voxel (also a
+    skull-stripped T1 given as the mask). Saved as <prefix>_T1w_brain_mask.nii.gz (uint8). Prints what it did. Returns
+    {'brain_mask_rule': 'own', 'brain_mask', 'given', 'reoriented', 'binarized'}."""
+    prefix = prefix or default_prefix(t1)
+    out = Path(out_dir) / f'{prefix}_T1w_brain_mask.nii.gz'
+    res = {'brain_mask_rule': 'own', 'brain_mask': str(out), 'given': str(brain_mask)}
+    with tempfile.TemporaryDirectory() as tmp:
+        res['reoriented'] = not is_standard_orientation(brain_mask)
+        mask = reorient(brain_mask, Path(tmp) / 'mask_reorient.nii.gz') if res['reoriented'] else brain_mask
+        if not _same_grid(mask, t1):
+            raise ValueError(f'{prefix}: the brain mask {brain_mask} is not on the grid of the T1 (shape and affine, also '
+                             'after the orientation check): bring it to the T1 as acquired first (no resampling here)')
+        img = nib.load(mask)
+        data = np.squeeze(np.asanyarray(img.dataobj))
+        res['binarized'] = not np.isin(np.unique(data), (0, 1)).all()
+        nib.save(nib.Nifti1Image((data > 0).astype(np.uint8), img.affine, img.header), out)
+    print(f'{prefix}: own brain mask {brain_mask}: {"reoriented like the T1, " if res["reoriented"] else ""}on the grid '
+          f'of the T1, {"made binary (non-zero voxels), " if res["binarized"] else ""}-> {out}', flush=True)
     return res
 
 
@@ -617,7 +600,8 @@ def registration_qc_figure(tpl, warped, tpl_mask, tpl_cereb, out_png, text):
     """Template (upper row) and the warped T1 (lower row) through the template brain centre (and its cerebellum), with
     the template brain mask (and cerebellum) as lines on both."""
     import matplotlib
-    matplotlib.use('Agg')
+    if 'inline' not in matplotlib.get_backend():  # in a notebook keep its inline figures (Agg there stops plt.show)
+        matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     centres = [('brain centre', np.round(np.mean(np.nonzero(tpl_mask), axis=1)).astype(int))]
     if tpl_cereb is not None:
@@ -655,14 +639,14 @@ def edge_corr(t1, t2_on_t1, brain_mask):
 
 
 def head2brain_and_n4correction(t1, brain_mask, t2=None, out_dir=None, prefix=None):
-    """Part 2a of the direct normalisation: skull stripping and bias correction of the T1 of step 1 (orient) and, if
-    given, of the T2. t2 (optional; the registration is T1 only for now, the T2 is prepared for a later T1 + T2
-    normalisation): the T2 already on the T1 grid, not skull-stripped (the rigid T2 of step 1,
-    <prefix>_T2w_rigid2T1.nii.gz, whole head; no new registration). ANTs, default parameters:
+    """Part 1c of the preprocessing (until 2026-11-12 a part of direct_normalize): skull stripping and bias
+    correction of the T1 of orient and, if given, of the T2. t2 (optional; the registration is T1 only for now, the T2
+    is prepared for a later T1 + T2 normalisation): the T2 already on the T1 grid, not skull-stripped (the rigid T2 of
+    1a, <prefix>_T2w_rigid2T1.nii.gz, whole head; no new registration). ANTs, default parameters:
       ImageMath 3 <brain> m <image> <brain_mask>                        (skull stripping)
       N4BiasFieldCorrection -d 3 -i <brain> -x <brain_mask> -o <out>    (bias field estimated inside the brain mask;
                                                                          without -x the zero background would count)
-    Saved in out_dir (default: the folder of t1): <prefix>_T1w_brain_n4.nii.gz (input of register_to_template and of later
+    Saved in out_dir (default: the folder of t1): <prefix>_T1w_brain_n4.nii.gz (input of step 2 and of later
     analyses) and <prefix>_T2w_brain_n4.nii.gz (on the T1 grid). Returns {'t1_brain', 't2_brain'} ('t2_brain' None
     without a T2)."""
     prefix = prefix or default_prefix(t1)
@@ -676,7 +660,7 @@ def head2brain_and_n4correction(t1, brain_mask, t2=None, out_dir=None, prefix=No
         if t2 is not None:
             ref, img = nib.load(t1), nib.load(t2)
             if img.shape[:3] != ref.shape[:3] or not np.allclose(img.affine, ref.affine, atol=1e-3):
-                raise ValueError(f'{t2} is not on the T1 grid: give the rigid T2 of step 1 (<prefix>_T2w_rigid2T1.nii.gz)')
+                raise ValueError(f'{t2} is not on the T1 grid: give the rigid T2 of 1a (<prefix>_T2w_rigid2T1.nii.gz)')
             images['t2'] = str(t2)
         for mod, f in images.items():
             brain = os.path.join(tmp, f'{mod}_brain.nii.gz')
@@ -688,7 +672,7 @@ def head2brain_and_n4correction(t1, brain_mask, t2=None, out_dir=None, prefix=No
 
 
 def register_to_template(t1_brain, tpl_name, tpl_t1, tpl_mask, out_dir='.', prefix=None, init=None):
-    """Part 2b of the direct normalisation: registration of one visit to one template; once per template of
+    """Step 2, the direct normalisation: registration of one visit to one template; once per template of
     normalization_targets().
     t1_brain: bias-corrected, skull-stripped T1 of head2brain_and_n4correction; tpl_t1: skull-stripped template T1 (the
     BCP templates are; MNI: see mni_template); then antsRegistrationSyN.sh -d 3 -f <tpl_t1> -m <t1_brain> -x <tpl_mask>
@@ -702,7 +686,7 @@ def register_to_template(t1_brain, tpl_name, tpl_t1, tpl_mask, out_dir='.', pref
                                                                   whichtoinvert [True, False]
       <prefix>_to-<tpl_name>_Warped.nii.gz                        t1_brain in template space (linear interpolation)
     Returns a dict of the outputs, the template files (with md5) and the antsRegistration call it made ('ants_call').
-    QC: direct_normalization_qc / registration_qc."""
+    QC: direct_norm_qc / registration_qc."""
     script = ants_registration_syn()
     if not script:
         raise RuntimeError('antsRegistrationSyN.sh not found: set ANTSPATH to the ANTs bin folder (see README.md)')
@@ -816,38 +800,46 @@ def registration_qc(reg, brain_mask, t1_cerebellum=None, tpl_cerebellum=None, ou
 # One visit: step 1 (preprocess) and step 2 (direct_normalize)
 # ---------------------------------------------------------------------------
 
-def preprocess(t1, age_months, out_dir, t2=None, prefix=None, t1_brain=None, save_brain=False, always_qc_figure=False):
-    """Step 1 of the pipeline, preprocessing of one visit in three parts:
-      1a. orient: the T1 (and T2) in the standard orientation (fslreorient2std; a copy only if needed,
-          <prefix>_T1w_reorient.nii.gz / _T2w_reorient.nii.gz);
-      1b. skull_strip_step: SynthStrip brain mask, <prefix>_T1w_brain_mask.nii.gz (below UNION_BELOW_MONTHS the
-          default OR the infant model); with a T2, the T2 registered rigidly to the T1 (whole head),
-          <prefix>_T2w_rigid2T1.nii.gz and _0GenericAffine.mat;
-      1c. QC: SUITPy cerebellum of the T1 (twice) inside the brain mask, brain volume for the age (needs_visual_check;
-          <prefix>_skullstrip_qc.png if flagged, or always with always_qc_figure).
-    t1, t2 (optional): the images as acquired (whole head); age_months: age at scan (chooses the SynthStrip models
-    and the age bin of the volume check). Writes <prefix>_preprocess.json in out_dir (inputs, software, 'orient',
-    'skull_strip': outputs and QC) and returns its content; step 2 (direct_normalize) uses orient.t1,
-    skull_strip.brain_mask and skull_strip.t2_on_t1."""
-    _require(need_infant=age_months < UNION_BELOW_MONTHS)
+def preprocess(t1, age_months, out_dir, t2=None, prefix=None, brain_mask=None):
+    """Step 1 of the pipeline, preprocessing of one visit for one brain mask, in three parts (no QC here; the brain mask
+    is checked by direct_norm_qc, after the registrations):
+      1a. orient: the T1 (and T2) in the standard orientation (fslreorient2std; temporary copies only, deleted at the
+          end); with a T2, the T2 registered rigidly to the T1 (whole head), <prefix>_T2w_rigid2T1.nii.gz and
+          _0GenericAffine.mat (reused from an earlier run of the visit with the same T1 and T2, if any);
+      1b. brain mask, <prefix>_T1w_brain_mask.nii.gz: SynthStrip (synthstrip_age_specific; below UNION_BELOW_MONTHS the
+          default OR the infant model) or, with brain_mask, an own mask (own_brain_mask: on the T1 as acquired,
+          reoriented like the T1, made binary);
+      1c. head2brain_and_n4correction: skull stripping and N4 of the T1 (and of the rigid T2) inside the brain mask,
+          <prefix>_T1w_brain_n4.nii.gz (and <prefix>_T2w_brain_n4.nii.gz), the input of step 2.
+    t1, t2 (optional): the images as acquired (whole head, any orientation); age_months: age at scan in months (chooses
+    the SynthStrip models and, in step 2, the BCP templates); prefix: default from the T1 name; a run with an own mask
+    needs a prefix of its own (e.g. <id>_manual_mask), so that the SynthStrip run of the visit stays next to it. Writes
+    <prefix>_preprocess.json in out_dir (inputs, software, 'orient', 'skull_strip', 'head2brain') and returns its
+    content."""
+    _require(need_infant=brain_mask is None and age_months < UNION_BELOW_MONTHS)
     prefix = prefix or default_prefix(t1)
     out_dir = Path(out_dir)
-    log = {'inputs': {'t1': str(t1), 't2': str(t2) if t2 else None, 'age_months': float(age_months), 'prefix': prefix},
-           'software': environment_info()}
-    log['orient'] = orient(t1, t2, out_dir, prefix)
-    log['skull_strip'] = skull_strip_step(log['orient']['t1'], age_months, log['orient']['t2'], out_dir, prefix,
-                                          t1_brain, save_brain, always_qc_figure=always_qc_figure)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log = {'inputs': {'t1': str(t1), 't2': str(t2) if t2 else None, 'age_months': float(age_months), 'prefix': prefix,
+                      'brain_mask': str(brain_mask) if brain_mask else None}, 'software': environment_info()}
+    with tempfile.TemporaryDirectory() as tmp:
+        o = orient(t1, t2, out_dir, prefix, tmp_dir=tmp)
+        log['orient'] = {k: v for k, v in o.items() if k not in ('t1', 't2')}  # t1, t2: temporary files
+        log['skull_strip'] = (own_brain_mask(brain_mask, o['t1'], out_dir, prefix) if brain_mask
+                              else synthstrip_age_specific(o['t1'], age_months, out_dir, prefix))
+        log['head2brain'] = head2brain_and_n4correction(o['t1'], log['skull_strip']['brain_mask'], o.get('t2_on_t1'),
+                                                        out_dir, prefix)
     with open(out_dir / f'{prefix}_preprocess.json', 'w') as f:
         json.dump(log, f, indent=2, default=str)
     return log
 
 
-def direct_normalize(t1, age_months, brain_mask, out_dir=None, t2=None, prefix=None, steps=(1, 2, 3), bcp_dir=None,
-              mni_dir=None, rotation_init=True, templates=None):
-    """Direct normalisation of one visit (step 2 of the pipeline): the visit registered to each template itself, in
-    three parts; `steps` chooses which run (1, 2, 3 = parts 2a, 2b, 2c; files of 2b and 2c: <prefix>_direct_*):
-      2a. head2brain_and_n4correction(t1, brain_mask, t2): skull stripping, N4 -> <prefix>_T1w_brain_n4.nii.gz (+ T2);
-      2b. register_to_template for every template of `templates` (names; default normalization_targets(age_months):
+def direct_normalize(t1_brain, age_months, out_dir=None, prefix=None, brain_mask=None, t2=None, templates=None,
+                     rotation_init=True, bcp_dir=None, mni_dir=None):
+    """Direct normalisation of one visit (step 2 of the pipeline; until 2026-11-12 also the skull stripping + N4,
+    now 1c): the N4 T1 of step 1 registered to each template itself. Its QC is
+    direct_norm_qc(<prefix>_direct_normalize.json), run apart.
+    register_to_template for every template of `templates` (names; default normalization_targets(age_months):
          the BCP template of the nearest atlas month and MNI; e.g. the other templates of the visit's avgsubj edges,
          avgsubj_edges) -> transforms and warped T1; templates registered before and not in `templates` are kept;
          with rotation_init (default), every registration starts from the rotation of rotation_search_init against
@@ -856,59 +848,55 @@ def direct_normalize(t1, age_months, brain_mask, out_dir=None, t2=None, prefix=N
          in the field of view is registered too (why for every visit: notebook 3, 3.2); <prefix>_direct_to-<template>
          _init.mat, a record only: it is inside 0GenericAffine.mat. A rotation search against MNI itself picked a
          wrong rotation below about 11 months (adult vs infant contrast). rotation_init=False: the centre-of-mass
-         start of antsRegistrationSyN.sh;
-      2c. direct_normalization_qc -> reference cerebellum (brain_to_cerebellum), QC, figures, <prefix>_direct_normalize_qc.json.
+         start of antsRegistrationSyN.sh.
     The registrations use the T1 only (for now; a T1 + T2 normalisation may follow).
-    t1: T1 of step 1 (orient; not skull-stripped); brain_mask: mask of step 1; t2 (optional): T2 on the T1 grid,
-    not skull-stripped (rigid T2 of step 1, <prefix>_T2w_rigid2T1.nii.gz), only skull-stripped and bias corrected in
-    2a and used for the SUITPy cerebellum of 2c; out_dir: default the folder of t1. 2a and 2b
-    write their results to <prefix>_direct_normalize.json (an existing
-    file is updated, so a part can run alone once the parts before it have run). Returns the content of
-    <prefix>_direct_normalize.json (with 2c also 'qc': the content of <prefix>_direct_normalize_qc.json)."""
-    prefix = prefix or default_prefix(t1)
-    out_dir = Path(out_dir) if out_dir else Path(t1).parent
+    t1_brain: <prefix>_T1w_brain_n4.nii.gz of step 1 (skull-stripped, bias-corrected); out_dir: default the folder of
+    t1_brain; prefix: default from the name of t1_brain. brain_mask, t2 (the rigid T2): not used here, recorded for the
+    QC and step 3; default from <prefix>_preprocess.json of out_dir, else from an existing <prefix>_direct_normalize.json
+    (registrations of before 2026-11-12). Writes <prefix>_direct_normalize.json (an existing file is updated:
+    inputs, software, 'head2brain' (the N4 images, as before 2026-11-12), per template the files and the
+    antsRegistration calls) and returns its content."""
+    t1_brain = Path(t1_brain)
+    if not t1_brain.exists():
+        raise FileNotFoundError(f'{t1_brain} missing: run step 1 (preprocess) first')
+    prefix = prefix or t1_brain.name.replace('_T1w_brain_n4.nii.gz', '')
+    out_dir = Path(out_dir) if out_dir else t1_brain.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     log_file = out_dir / f'{prefix}_direct_normalize.json'
     log = json.loads(log_file.read_text()) if log_file.exists() else {}
-    log.update(inputs={'t1': str(t1), 't2': str(t2) if t2 else None, 'brain_mask': str(brain_mask),
-                       'age_months': float(age_months), 'prefix': prefix}, software=environment_info())
-
-    def save():
-        log_file.write_text(json.dumps(log, indent=2, default=str))
-    if 1 in steps:
-        log['head2brain'] = head2brain_and_n4correction(t1, brain_mask, t2, out_dir, prefix)
-        save()
-    if 2 in steps:
-        t1_brain = log.get('head2brain', {}).get('t1_brain')
-        if not (t1_brain and Path(t1_brain).exists()):
-            raise FileNotFoundError(f'{prefix}: no skull-stripped T1 of 2a in {log_file}: run 2a (--steps 1) first')
-        targets = ([template_by_name(n, bcp_dir, mni_dir) for n in templates] if templates
-                   else normalization_targets(age_months, bcp_dir, mni_dir))
+    prep_file = out_dir / f'{prefix}_preprocess.json'
+    prep = json.loads(prep_file.read_text()) if prep_file.exists() else {}
+    old = log.get('inputs', {})
+    log['inputs'] = {**old, 't1_brain': str(t1_brain), 'age_months': float(age_months), 'prefix': prefix,
+                     'brain_mask': str(brain_mask or prep.get('skull_strip', {}).get('brain_mask') or old.get('brain_mask')),
+                     't2': str(t2 or prep.get('orient', {}).get('t2_on_t1') or old.get('t2') or '') or None,
+                     'preprocess_json': str(prep_file) if prep else old.get('preprocess_json')}
+    log['head2brain'] = {**(prep.get('head2brain') or log.get('head2brain') or {}), 't1_brain': str(t1_brain)}
+    log['software'] = environment_info()
+    targets = ([template_by_name(n, bcp_dir, mni_dir) for n in templates] if templates
+               else normalization_targets(age_months, bcp_dir, mni_dir))
+    if rotation_init:
+        bcp = bcp_template(age_months, bcp_dir)
+        bcp_mat = out_dir / f"{prefix}_direct_to-{bcp['name']}_init.mat"
+        bcp_init = str(bcp_mat) if bcp_mat.exists() and bcp['name'] not in [t['name'] for t in targets] \
+            else rotation_search_init(t1_brain, bcp['t1'], bcp_mat)
+    log.setdefault('normalize', {})
+    for tpl in targets:
+        init = None
         if rotation_init:
-            bcp = bcp_template(age_months, bcp_dir)
-            bcp_mat = out_dir / f"{prefix}_direct_to-{bcp['name']}_init.mat"
-            bcp_init = str(bcp_mat) if bcp_mat.exists() and bcp['name'] not in [t['name'] for t in targets] \
-                else rotation_search_init(t1_brain, bcp['t1'], bcp_mat)
-        log.setdefault('normalize', {})
-        for tpl in targets:
-            init = None
-            if rotation_init:
-                init = bcp_init if tpl['name'] == bcp['name'] else \
-                    rotation_start(bcp_init, t1_brain, tpl['t1'], out_dir / f"{prefix}_direct_to-{tpl['name']}_init.mat")
-            reg = register_to_template(t1_brain, tpl['name'], tpl['t1'], tpl['mask'], out_dir, f'{prefix}_direct',
-                                       init=init)
-            log['normalize'][tpl['name']] = {**reg, 'tpl_cerebellum': tpl['cerebellum']}
-        save()
-    if 3 in steps:
-        if not log.get('normalize'):
-            raise FileNotFoundError(f'{prefix}: no registrations of 2b in {log_file}: run 2b (--steps 2) first')
-        return {**log, 'qc': direct_normalization_qc(log_file)}
+            init = bcp_init if tpl['name'] == bcp['name'] else \
+                rotation_start(bcp_init, t1_brain, tpl['t1'], out_dir / f"{prefix}_direct_to-{tpl['name']}_init.mat")
+        reg = register_to_template(t1_brain, tpl['name'], tpl['t1'], tpl['mask'], out_dir, f'{prefix}_direct', init=init)
+        log['normalize'][tpl['name']] = {**reg, 'tpl_cerebellum': tpl['cerebellum']}
+    log_file.write_text(json.dumps(log, indent=2, default=str))
     return log
 
 
-def direct_normalization_qc(normalize_json, qc_figure=True):
-    """Part 2c of the direct normalisation: QC of one visit after the registrations (normalize_json:
-    <prefix>_direct_normalize.json).
+def direct_norm_qc(normalize_json, qc_figure=True):
+    """QC of steps 1-2, apart from direct_normalize (until 2026-11-12 its part 2c / step 3): QC of one visit
+    after the registrations (normalize_json: <prefix>_direct_normalize.json; command line --direct_norm_qc; Slurm:
+    submit_direct_normalize(_array)(..., qc=True)), the only QC of steps 1-2 (until 2026-11-11 direct_normalization_qc, still an alias;
+    step 1 had its own QC of the brain mask; its errors show here, in the registrations).
     The cerebellum of the visit is its reference cerebellum, <prefix>_cerebellum_suitpy_from-brain-N4_dseg.nii.gz of
     brain_to_cerebellum
     (SUITPy on the skull-stripped T1 with the T2 and the brain mask, medoid of 2-3 runs, chosen without any
@@ -924,6 +912,8 @@ def direct_normalization_qc(normalize_json, qc_figure=True):
     brain_to_cerebellum; 'qc' per template; 'needs_visual_check': no cerebellum, or its Dice with the main template, the
     first of normalize_json, below CEREB_DICE_MIN) and returns its content."""
     log = json.loads(Path(normalize_json).read_text())
+    if not log.get('normalize'):
+        raise FileNotFoundError(f'no registrations in {normalize_json}: run direct_normalize first')
     out_dir, prefix = Path(normalize_json).parent, log['inputs']['prefix']
     brain_mask = log['inputs']['brain_mask']
     main = next(iter(log['normalize']))
@@ -951,14 +941,154 @@ def direct_normalization_qc(normalize_json, qc_figure=True):
     return res
 
 
+direct_normalization_qc = direct_norm_qc  # the name until 2026-11-11 (notebooks 3-5)
+
+
+def direct_qc_flags(rows, reference=DIRECT_QC_REFERENCE):
+    """Flags of registrations (of new visits) against the QC of this project, as notebook 3, 3.3.1 and notebook 5, 5.1,
+    but with the groups frozen: the median and the scale of the group come from the reference (registrations of the
+    project that passed the visual QC, DIRECT_QC_REFERENCE), not from the new visits, so a flag does not depend
+    on how many visits a dataset has. Group: the template (BCP, all ages), MNI by the age group of the visit.
+    rows: DataFrame, one row per registration, with template, age_months and the values of registration_qc
+    (t1_corr, brain_hd95, brain_log10_hd95, cerebellum_hd95, cerebellum_log10_hd95).
+    A registration is flagged (to look at its QC figure, not failed) if
+      - a check is an outlier: robust z = (value - median) / scale beyond REVIEW_Z in the worse direction (T1 r: z <
+        -REVIEW_Z, lower is worse; log10 HD95: z > REVIEW_Z, higher is worse); an HD95 check also at least HD95_MIN_EXCESS_MM above the median HD95 of the group (the HD95 moves in
+        voxel steps, so z > 3 can be one voxel); a missing value (e.g. no cerebellum) is flagged;
+      - MNI: T1 r < MNI_T1R_MIN;
+      - no reference group (template not in the reference).
+    Returns a copy of rows with z_<check>, flags (one text per flag) and flagged."""
+    ref = pd.read_csv(reference, sep='\t')
+    out = rows.copy().reset_index(drop=True)
+    z = {c: np.full(len(out), np.nan) for c in DIRECT_QC_CHECKS}
+    flags = [[] for _ in range(len(out))]
+    for i, r in out.iterrows():
+        mni = r['template'] == MNI_NAME
+        for c, sign in DIRECT_QC_CHECKS.items():
+            g = ref[(ref['template'] == r['template']) & (ref['metric'] == c) & (ref['age_min_months'] <= r['age_months'])
+                    & (r['age_months'] < ref['age_max_months'])]
+            if g.empty:
+                flags[i].append(f'{c}: no reference group')
+                continue
+            g = g.iloc[0]
+            z[c][i] = (r[c] - g['median']) / g['scale']
+            group = f"{r['template']}" + (f", {g['age_min_months']:g}-{g['age_max_months']:g} months" if mni else '')
+            if c == 't1_corr':
+                far, text = True, f"T1 r {r[c]:.3f}"
+            else:
+                mm, excess = r[c.replace('log10_', '')], HD95_MIN_EXCESS_MM['MNI' if mni else 'BCP']
+                far = not mm - g['median_mm'] < excess  # NaN: flagged
+                text = f"{c.split('_')[0]} HD95 {mm:.1f} mm"
+            if not sign * z[c][i] <= REVIEW_Z and far:
+                flags[i].append(f"{text} (reference median {10 ** g['median'] if c != 't1_corr' else g['median']:.3g}"
+                                f" of {group}, n {g['n']:g}; z {z[c][i]:+.1f}, {'lower' if sign < 0 else 'higher'} = worse)")
+        if mni and not r['t1_corr'] >= MNI_T1R_MIN:
+            flags[i].append(f"T1 r with MNI {r['t1_corr']:.3f} < {MNI_T1R_MIN} (likely failed)")
+    for c in DIRECT_QC_CHECKS:
+        out[f'z_{c}'] = z[c]
+    out['flags'] = [' | '.join(f) for f in flags]
+    out['flagged'] = [bool(f) for f in flags]
+    return out
+
+
+DIRECT_QC_PLOT = {  # registration_qc value -> panel title (what the metric means), y label (the metric)
+    't1_corr': ('Overall structural alignment', 'T1 correlation (r)'),
+    'brain_dice': ('Brain overlap', 'Dice'),
+    'brain_log10_hd95': ('Brain boundary error', 'HD95 (mm, log scale)'),
+    'cerebellum_dice': ('Cerebellum overlap', 'Dice'),
+    'cerebellum_log10_hd95': ('Cerebellum boundary error', 'HD95 (mm, log scale)'),
+    'jacobian_min': ('Folding', 'Minimum Jacobian'),
+}
+
+
+def _qc_age_x(age_months):
+    """x axis of plot_direct_qc_by_age: below OLDER_AGE_EDGES[0] the BCP template months (eval_group_x: each visit at its
+    real age between the months), from there one group 8-18Y (linear in age). Returns the groups and the positions."""
+    a = np.asarray(age_months, float)
+    young = a < OLDER_AGE_EDGES[0]
+    _, groups, x_young = eval_group_x(['BCP'] * int(young.sum()), a[young])
+    x = np.empty(len(a))
+    x[young] = x_young
+    lo, hi = OLDER_AGE_EDGES[0], OLDER_AGE_EDGES[-1]
+    x[~young] = len(groups) - 0.5 + np.clip((a[~young] - lo) / (hi - lo), 0, 1)
+    return list(groups) + ([f'{lo // 12}-{hi // 12}Y'] if (~young).any() else []), x
+
+
+def _flag_reason(flags, metric, z):
+    """' (z -8.0)' / ' (T1 r < 0.5)' if the flags of direct_qc_flags flag a registration by this metric, else ''."""
+    text = {'t1_corr': 'T1 r ', 'brain_log10_hd95': 'brain HD95', 'cerebellum_log10_hd95': 'cerebellum HD95'}.get(metric)
+    items = [f for f in flags.split(' | ') if text and f.startswith(text)]
+    why = [f'z {z:+.1f}' for f in items if 'reference median' in f][:1] + \
+          ['T1 r < 0.5' for f in items if f.endswith('(likely failed)')] + ['no value' for f in items if 'nan' in f]
+    return f" ({', '.join(why)})" if why else ''
+
+
+def plot_direct_qc_by_age(rows, values=DIRECT_QC_VALUES):
+    """The QC metrics of new registrations by age, among those of the project, in the style of Figure 1 (notebook 5):
+    faint grey dots the registrations of the project that passed the visual QC (values, DIRECT_QC_VALUES), the new ones
+    flagged (direct_qc_flags) in red (opaque, with their prefix; in the panel of the check that flagged it also the
+    reason: z of the check, or T1 r < 0.5), the others in blue (half transparent; the colours of avgsubj and
+    tpl2tpl). x: age groups (BCP template months, then 8-18Y), each registration at its real age. One row per metric
+    (DIRECT_QC_PLOT), one column per role: to the nearest BCP template and to MNI. rows: the output of direct_qc_flags
+    (prefix, role, age_months, the metrics, flagged, flags, z_<check>). Returns the figure."""
+    import matplotlib.pyplot as plt
+    ref = pd.read_csv(values, sep='\t').assign(new=False)
+    d = pd.concat([ref, rows.assign(new=True)], ignore_index=True)
+    groups, d['x'] = _qc_age_x(d['age_months'])
+    roles = {'nearest': 'Nearest BCP template', 'MNI': 'MNI'}
+    new_style = {False: ('tpl2tpl', 0.55, 'ok'), True: ('avgsubj', 1.0, 'flagged')}
+    mm = 1 / 25.4
+    rc = {'font.family': 'sans-serif', 'font.sans-serif': ['Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans'],
+          'pdf.fonttype': 42, 'font.size': 6, 'axes.linewidth': 0.6, 'xtick.major.width': 0.6,
+          'ytick.major.width': 0.6, 'xtick.major.size': 2, 'ytick.major.size': 2, 'xtick.labelsize': 5,
+          'ytick.labelsize': 6, 'axes.labelsize': 6}
+    with plt.rc_context(rc):
+        fig, axes = plt.subplots(len(DIRECT_QC_PLOT), len(roles), figsize=(183 * mm, 36 * mm * len(DIRECT_QC_PLOT)),
+                                 sharex=True, squeeze=False)
+        for j, (role, name) in enumerate(roles.items()):
+            for i, (k, (title, label)) in enumerate(DIRECT_QC_PLOT.items()):
+                ax, v = axes[i, j], d[(d['role'] == role) & d[k].notna()]
+                p = v[~v['new']]
+                ax.scatter(p['x'], p[k], s=2.5, color=WAY_COLORS['direct'], alpha=0.35, linewidths=0, zorder=1,
+                           label='Ref')
+                for flagged, (way, alpha, text) in new_style.items():
+                    n = v[v['new'] & (v['flagged'] == flagged)]
+                    ax.scatter(n['x'], n[k], s=14, color=WAY_COLORS[way], alpha=alpha, edgecolors='white',
+                               linewidths=0.3, zorder=3 + flagged, label=text)
+                    for r in n.itertuples() if flagged else []:  # the flagged ones: prefix, here the reason too
+                        ax.annotate(r.prefix + _flag_reason(r.flags, k, getattr(r, f'z_{k}', np.nan)),
+                                    (r.x, getattr(r, k)), xytext=(3, 2), textcoords='offset points', fontsize=5,
+                                    color=WAY_COLORS[way], zorder=5)
+                if 'hd95' in k:  # log10 mm; ticks labelled in mm
+                    lo, hi = ax.get_ylim()
+                    ticks = [t for t in (1, 1.5, 2, 3, 5, 10, 20, 50, 100) if lo <= np.log10(t) <= hi]
+                    ax.set_yticks(np.log10(ticks))
+                    ax.set_yticklabels([f'{t:g}' for t in ticks])
+                    ax.set_ylim(lo, hi)
+                ax.set_title(f'{name}\n{title}' if i == 0 else title, fontsize=7, pad=4)
+                ax.spines[['top', 'right']].set_visible(False)
+                if j == 0:
+                    ax.set_ylabel(label)
+        for ax in axes[-1]:
+            ax.set_xticks(range(len(groups)))
+            ax.set_xticklabels(groups, fontsize=4.2)
+            ax.set_xlim(-0.6, len(groups) - 0.4)
+            ax.set_xlabel('Age group')
+        fig.legend(*axes[0, 0].get_legend_handles_labels(), loc='lower center', ncol=3, frameon=False, fontsize=6,
+                   markerscale=1.5)
+        fig.tight_layout(rect=(0, 0.025, 1, 1), h_pad=0.8)
+    return fig
+
+
 def _job_script(job, name, log_dir, commands, setup, cpus, mem, time):
     """Write <log_dir>/<name>.sh: Slurm settings (job name `job`, the short name squeue shows; output
-    <log_dir>/<name>.out), setup, ANTSPATH / NEONORM_* of this Python session, commands. It runs with sbatch (one job)
-    or with bash inside a task of a job array (submit_direct_normalize_array). A new script replaces the old one.
-    Returns its path."""
+    <log_dir>/<name>.out), setup, ANTSPATH / NEONORM_* of this Python session, commands. Not the CPU threads of this
+    session (NEONORM_NTHREADS, e.g. of a notebook; also unset, as sbatch passes the environment on): a job uses the CPUs
+    it asks for (SLURM_CPUS_PER_TASK, n_threads). It runs with sbatch (one job) or with bash inside a task of a job array
+    (submit_direct_normalize_array). A new script replaces the old one. Returns its path."""
     log_dir.mkdir(parents=True, exist_ok=True)
     exports = [f'export {k}={shlex.quote(os.environ[k])}' for k in
-               ('ANTSPATH', 'NEONORM_BCP_TEMPLATES', 'NEONORM_MNI_TEMPLATE', 'NEONORM_NTHREADS') if os.environ.get(k)]
+               ('ANTSPATH', 'NEONORM_BCP_TEMPLATES', 'NEONORM_MNI_TEMPLATE') if os.environ.get(k)] + ['unset NEONORM_NTHREADS']
     script = '\n'.join(['#!/bin/bash', f'#SBATCH --job-name={job}', f'#SBATCH --cpus-per-task={cpus}',
                         f'#SBATCH --mem={mem}', f'#SBATCH --time={time}', f'#SBATCH --output={log_dir}/{name}.out',
                         setup, *exports, 'set -e', *[' '.join(shlex.quote(str(c)) for c in cmd) for cmd in commands]]) + '\n'
@@ -975,58 +1105,60 @@ def _sbatch(script, *options):
     return r.stdout.strip().split(';')[0]
 
 
-NORM_JOB = {'cpus': 8, 'mem': '16G', 'time': '04:00:00'}  # Slurm resources of 2a-2b (registrations)
-QC_JOB = {'cpus': 4, 'mem': '24G', 'time': '01:00:00'}    # 2c (SUITPy needs about 20G)
+NORM_JOB = {'cpus': 8, 'mem': '16G', 'time': '04:00:00'}  # Slurm resources of step 2 (registrations)
+QC_JOB = {'cpus': 4, 'mem': '24G', 'time': '01:00:00'}    # QC (SUITPy needs about 20G)
 
 
-def direct_normalize_job_scripts(t1, age_months, brain_mask, out_dir=None, t2=None, prefix=None, steps=(1, 2, 3),
-                                 setup='', rotation_init=True, templates=None):
-    """Write, without submitting, the Slurm job scripts of direct_normalize() for one visit: 2a-2b (`steps` 1, 2,
-    if in `steps`) -> <out_dir>/log/<prefix>_direct_normalize.sh (job <number>_direct, NORM_JOB; output <prefix>_direct_normalize.out;
-    with `templates`: <prefix>_direct_normalize_to-<template>[-<template>].sh / .out, so earlier logs are kept)
-    and 2c (3, if in `steps`) -> <prefix>_direct_normalize_qc.sh (job <number>_directqc, QC_JOB; output
-    <prefix>_direct_normalize_qc.out). <number>: the prefix without 'sub-'. Each script runs `python neonorm.py
-    --direct_normalize ... --steps ...` (and --no_rotation_init, --templates), i.e. direct_normalize(). Used by submit_direct_normalize (one visit) and
-    submit_direct_normalize_array (many visits). Returns {'prefix', 'age_months', 't1', 't2', 'brain_mask', 'templates',
-    'steps', 'rotation_init'} and 'script', 'log' (2a-2b) / 'qc_script', 'qc_log' (2c)."""
-    prefix = prefix or default_prefix(t1)
+def direct_normalize_job_scripts(t1_brain, age_months, out_dir=None, prefix=None, brain_mask=None, t2=None, setup='',
+                                 rotation_init=True, templates=None, register=True, qc=False):
+    """Write, without submitting, the Slurm job scripts of one visit: with register=True direct_normalize() ->
+    <out_dir>/log/<prefix>_direct_normalize.sh (job <number>_direct, NORM_JOB; output <prefix>_direct_normalize.out;
+    with `templates`: <prefix>_direct_normalize_to-<template>[-<template>].sh / .out, so earlier logs are kept), and
+    with qc=True direct_norm_qc() -> <prefix>_direct_normalize_qc.sh (job <number>_directqc, QC_JOB; output
+    <prefix>_direct_normalize_qc.out). <number>: the prefix without 'sub-'. The scripts run `python neonorm.py
+    --direct_normalize <t1_brain> ...` (and --brain_mask, --t2, --no_rotation_init, --templates) / `--direct_norm_qc
+    <prefix>_direct_normalize.json`. Arguments as direct_normalize. Used by submit_direct_normalize (one visit) and
+    submit_direct_normalize_array (many visits). Returns {'prefix', 'age_months', 't1_brain', 'templates', 'register',
+    'qc', 'rotation_init'} and 'script', 'log' (step 2) / 'qc_script', 'qc_log' (QC)."""
+    t1_brain = Path(t1_brain)
+    prefix = prefix or t1_brain.name.replace('_T1w_brain_n4.nii.gz', '')
     names = list(templates) if templates else [tpl['name'] for tpl in normalization_targets(age_months)]
     for name in names:
         template_by_name(name)  # fails here if a template file is missing
-    out_dir = Path(out_dir) if out_dir else Path(t1).parent
+    out_dir = Path(out_dir) if out_dir else t1_brain.parent
     log_dir = out_dir / 'log'
     number = prefix.replace('sub-', '')
-    if 3 in steps and 2 not in steps and not (out_dir / f'{prefix}_direct_normalize.json').exists():
-        raise FileNotFoundError(f'{out_dir}/{prefix}_direct_normalize.json missing: run 2a-2b (--steps 1 2) first')
-    cmd = ['python', Path(__file__).resolve(), '--direct_normalize', t1, age_months, out_dir,
-           '--brain_mask', brain_mask, '--prefix', prefix] + (['--t2', t2] if t2 else []) + \
-          ([] if rotation_init else ['--no_rotation_init']) + (['--templates', *names] if templates else [])
-    res = {'prefix': prefix, 'age_months': float(age_months), 't1': str(t1), 't2': str(t2) if t2 else None,
-           'brain_mask': str(brain_mask), 'templates': names, 'steps': tuple(steps),
-           'rotation_init': bool(rotation_init)}
-    first = [s for s in (1, 2) if s in steps]
-    if first:
+    normalize_json = out_dir / f'{prefix}_direct_normalize.json'
+    if qc and not register and not normalize_json.exists():
+        raise FileNotFoundError(f'{normalize_json} missing: run the registrations (register=True) first')
+    res = {'prefix': prefix, 'age_months': float(age_months), 't1_brain': str(t1_brain), 'templates': names,
+           'register': bool(register), 'qc': bool(qc), 'rotation_init': bool(rotation_init)}
+    if register:
+        cmd = ['python', Path(__file__).resolve(), '--direct_normalize', t1_brain, age_months, out_dir, '--prefix', prefix] + \
+              (['--brain_mask', brain_mask] if brain_mask else []) + (['--t2', t2] if t2 else []) + \
+              ([] if rotation_init else ['--no_rotation_init']) + (['--templates', *names] if templates else [])
         name = f'{prefix}_direct_normalize' + (f"_to-{'-'.join(names)}" if templates else '')
-        res['script'] = str(_job_script(f'{number}_direct', name, log_dir, [cmd + ['--steps', *first]], setup,
-                                        **NORM_JOB))
+        res['script'] = str(_job_script(f'{number}_direct', name, log_dir, [cmd], setup, **NORM_JOB))
         res['log'] = str(log_dir / f'{name}.out')
-    if 3 in steps:
+    if qc:
         res['qc_script'] = str(_job_script(f'{number}_directqc', f'{prefix}_direct_normalize_qc', log_dir,
-                                           [cmd + ['--steps', 3]], setup, **QC_JOB))
+                                           [['python', Path(__file__).resolve(), '--direct_norm_qc', normalize_json]],
+                                           setup, **QC_JOB))
         res['qc_log'] = str(log_dir / f'{prefix}_direct_normalize_qc.out')
     return res
 
 
-def submit_direct_normalize(t1, age_months, brain_mask, out_dir=None, t2=None, prefix=None, steps=(1, 2, 3), setup='',
-                            rotation_init=True, templates=None):
-    """direct_normalize() of one visit as Slurm jobs; computes nothing itself. Writes the job scripts
-    (direct_normalize_job_scripts) and submits them: 2a-2b as job <number>_direct, 2c as job <number>_directqc
-    after the first job has finished successfully. A new submission replaces the scripts and outputs of its jobs only, so running 2c again keeps the
-    log of the registrations. setup: shell lines that prepare the Python environment on your cluster (module load /
-    conda activate). Returns the dict of direct_normalize_job_scripts with 'job_id' / 'qc_job_id'. For many visits use
+def submit_direct_normalize(t1_brain, age_months, out_dir=None, prefix=None, brain_mask=None, t2=None, setup='',
+                            rotation_init=True, templates=None, register=True, qc=False):
+    """direct_normalize() of one visit as a Slurm job, with qc=True also its QC, direct_norm_qc(); computes nothing
+    itself. Writes the job scripts (direct_normalize_job_scripts) and submits them: step 2 as job <number>_direct, the QC as
+    job <number>_directqc after the first job has finished successfully (QC alone: register=False, qc=True). A new
+    submission replaces the scripts and outputs of its jobs only, so running the QC again keeps the log of the
+    registrations. setup: shell lines that prepare the Python environment on your cluster (module load / conda
+    activate). Returns the dict of direct_normalize_job_scripts with 'job_id' / 'qc_job_id'. For many visits use
     submit_direct_normalize_array."""
-    res = direct_normalize_job_scripts(t1, age_months, brain_mask, out_dir, t2, prefix, steps, setup, rotation_init,
-                                       templates)
+    res = direct_normalize_job_scripts(t1_brain, age_months, out_dir, prefix, brain_mask, t2, setup, rotation_init,
+                                       templates, register, qc)
     if 'script' in res:
         res['job_id'] = _sbatch(res['script'])
     if 'qc_script' in res:
@@ -1034,41 +1166,84 @@ def submit_direct_normalize(t1, age_months, brain_mask, out_dir=None, t2=None, p
     return res
 
 
-def submit_direct_normalize_array(visits, run_dir, steps=(1, 2, 3), setup='', max_running=50, qc_job=None):
-    """direct_normalize() of many visits as two Slurm job arrays, so that all waiting happens in the Slurm queue: array
-    `direct` (2a-2b, one task per visit, NORM_JOB) and array `directqc` (2c, QC_JOB), whose task i starts once
-    task i of `direct` has finished successfully (--dependency=aftercorr; it is cancelled if that task failed,
-    --kill-on-invalid-dep=yes). At most max_running tasks of each array run at the same time; the others wait in the
-    queue. qc_job: Slurm resources of `directqc` instead of QC_JOB (e.g. less for 2c again, when the SUITPy files
-    exist and are reused). visits: one dict per visit with the arguments of direct_normalize_job_scripts (t1,
-    age_months, brain_mask; optional out_dir, t2, prefix, rotation_init, templates). Each task runs the job script of its visit with bash, so
-    scripts and outputs per visit are the same as with submit_direct_normalize (<out_dir>/log/<prefix>_direct_normalize.sh
-    / .out, <prefix>_direct_normalize_qc.sh / .out). run_dir gets the task lists (<array>_tasks.tsv: script and output,
-    line i = task i), the array scripts and the Slurm output
-    per task (<array>_<job id>_<task>.out: only messages of Slurm itself, e.g. a memory or time limit). Slurm limits: at
-    most MaxArraySize - 1 tasks per array, and every task counts for MaxSubmitJobs (sacctmgr show assoc). Returns
-    {'job_id', 'qc_job_id', 'run_dir', 'visits': the dicts of direct_normalize_job_scripts, each with 'task' (array
-    index)}."""
+def submit_direct_normalize_array(visits, run_dir, setup='', max_running=50, qc_job=None, register=True, qc=False):
+    """direct_normalize() of many visits (with qc=True also direct_norm_qc()) as Slurm job arrays, so that all waiting
+    happens in the Slurm queue: with register=True array `direct` (step 2, one task per visit, NORM_JOB) and with qc=True
+    array `directqc` (the QC, QC_JOB), whose task i starts once task i of `direct` has finished successfully
+    (--dependency=aftercorr; it is cancelled if that task failed, --kill-on-invalid-dep=yes). At most max_running
+    tasks of each array run at the same time; the others wait in the queue. qc_job: Slurm resources of `directqc`
+    instead of QC_JOB (e.g. less for the QC again, when the SUITPy files exist and are reused). visits: one dict per visit
+    with the arguments of direct_normalize_job_scripts (t1_brain, age_months; optional out_dir, prefix, brain_mask, t2,
+    rotation_init, templates). Each task runs the job script of its visit with bash, so scripts and outputs per visit
+    are the same as with submit_direct_normalize (<out_dir>/log/<prefix>_direct_normalize.sh / .out,
+    <prefix>_direct_normalize_qc.sh / .out). run_dir gets the task lists (<array>_tasks.tsv: script and output, line
+    i = task i), the array scripts and the Slurm output per task (<array>_<job id>_<task>.out: only messages of Slurm
+    itself, e.g. a memory or time limit). Slurm limits: at most MaxArraySize - 1 tasks per array, and every task counts
+    for MaxSubmitJobs (sacctmgr show assoc). Returns {'job_id', 'qc_job_id', 'run_dir', 'visits': the dicts of
+    direct_normalize_job_scripts, each with 'task' (array index)}."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    visits = [{**direct_normalize_job_scripts(**v, steps=steps, setup=setup), 'task': i}
+    visits = [{**direct_normalize_job_scripts(**v, setup=setup, register=register, qc=qc), 'task': i}
               for i, v in enumerate(visits, 1)]
     res, after = {'run_dir': str(run_dir), 'visits': visits}, []
     for key, array, job in (('', 'direct', NORM_JOB), ('qc_', 'directqc', qc_job or QC_JOB)):
         if f'{key}script' not in visits[0]:
             continue
-        tasks = run_dir / f'{array}_tasks.tsv'
-        tasks.write_text(''.join(f"{v[key + 'script']}\t{v[key + 'log']}\n" for v in visits))
-        sh = run_dir / f'{array}_array.sh'
-        sh.write_text('\n'.join([
-            '#!/bin/bash', f'#SBATCH --job-name={array}', f'#SBATCH --array=1-{len(visits)}%{max_running}',
-            f'#SBATCH --cpus-per-task={job["cpus"]}', f'#SBATCH --mem={job["mem"]}', f'#SBATCH --time={job["time"]}',
-            f'#SBATCH --output={run_dir}/{array}_%A_%a.out',
-            f'IFS=$\'\\t\' read -r script out < <(sed -n "${{SLURM_ARRAY_TASK_ID}}p" {shlex.quote(str(tasks))})',
-            'bash "$script" > "$out" 2>&1']) + '\n')
-        res[f'{key}job_id'] = _sbatch(sh, *after)
+        res[f'{key}job_id'] = _submit_array([(v[key + 'script'], v[key + 'log']) for v in visits], run_dir, array, job,
+                                            max_running, after)
         after = [f'--dependency=aftercorr:{res[f"{key}job_id"]}', '--kill-on-invalid-dep=yes']
     return res
+
+
+def _submit_array(tasks, run_dir, array, job, max_running, after=()):
+    """One Slurm job array (job name `array`, resources `job`): task i runs the job script of tasks[i - 1] (script,
+    output) with bash; at most max_running tasks at the same time; `after`: sbatch options (e.g. a dependency).
+    Writes <run_dir>/<array>_tasks.tsv (script and output, line i = task i), <array>_array.sh and the Slurm output per
+    task (<array>_<job id>_<task>.out). Returns the job id."""
+    tasks_file = run_dir / f'{array}_tasks.tsv'
+    tasks_file.write_text(''.join(f'{script}\t{log}\n' for script, log in tasks))
+    sh = run_dir / f'{array}_array.sh'
+    sh.write_text('\n'.join([
+        '#!/bin/bash', f'#SBATCH --job-name={array}', f'#SBATCH --array=1-{len(tasks)}%{max_running}',
+        f'#SBATCH --cpus-per-task={job["cpus"]}', f'#SBATCH --mem={job["mem"]}', f'#SBATCH --time={job["time"]}',
+        f'#SBATCH --output={run_dir}/{array}_%A_%a.out',
+        f'IFS=$\'\\t\' read -r script out < <(sed -n "${{SLURM_ARRAY_TASK_ID}}p" {shlex.quote(str(tasks_file))})',
+        'bash "$script" > "$out" 2>&1']) + '\n')
+    return _sbatch(sh, *after)
+
+
+PREPROCESS_JOB = {'cpus': 2, 'mem': '24G', 'time': '01:00:00'}  # Slurm resources of step 1 (SynthStrip, N4)
+
+
+def preprocess_job_script(t1, age_months, out_dir, t2=None, prefix=None, brain_mask=None, setup=''):
+    """Write, without submitting, the Slurm job script of step 1 (preprocess) of one run: <out_dir>/log/
+    <prefix>_preprocess.sh (job <number>_prep, PREPROCESS_JOB; output <prefix>_preprocess.out); it runs `python
+    neonorm.py <t1> <age_months> <out_dir> --prefix <prefix>` (and --t2, --brain_mask). Arguments as preprocess.
+    Returns {'prefix', 'age_months', 't1', 't2', 'brain_mask', 'out_dir', 'script', 'log'}."""
+    prefix = prefix or default_prefix(t1)
+    out_dir, log_dir = Path(out_dir), Path(out_dir) / 'log'
+    cmd = ['python', Path(__file__).resolve(), t1, age_months, out_dir, '--prefix', prefix] + \
+          (['--t2', t2] if t2 else []) + (['--brain_mask', brain_mask] if brain_mask else [])
+    script = _job_script(f"{prefix.replace('sub-', '')}_prep", f'{prefix}_preprocess', log_dir, [cmd], setup,
+                         **PREPROCESS_JOB)
+    return {'prefix': prefix, 'age_months': float(age_months), 't1': str(t1), 't2': str(t2) if t2 else None,
+            'brain_mask': str(brain_mask) if brain_mask else None, 'out_dir': str(out_dir), 'script': str(script),
+            'log': str(log_dir / f'{prefix}_preprocess.out')}
+
+
+def submit_preprocess_array(runs, run_dir, setup='', max_running=50):
+    """Step 1 (preprocess) of many runs as one Slurm job array `prep` (one task per run, PREPROCESS_JOB), at most
+    max_running tasks at the same time. runs: one dict per run with the arguments of preprocess (t1, age_months,
+    out_dir; optional t2, prefix, brain_mask: an own mask, with a prefix of its own, e.g. <id>_manual_mask). Per run
+    the job script and its full output in <out_dir>/log/ (preprocess_job_script); run_dir: the task list, the array
+    script and Slurm's own messages (_submit_array). setup: shell lines that prepare the Python environment (e.g.
+    `source <software folder>/neonorm_env.sh`). Returns {'job_id', 'run_dir', 'runs': the dicts of
+    preprocess_job_script, each with 'task' (array index)}."""
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    runs = [{**preprocess_job_script(**r, setup=setup), 'task': i} for i, r in enumerate(runs, 1)]
+    job_id = _submit_array([(r['script'], r['log']) for r in runs], run_dir, 'prep', PREPROCESS_JOB, max_running)
+    return {'job_id': job_id, 'run_dir': str(run_dir), 'runs': runs}
 
 
 # ---------------------------------------------------------------------------
@@ -1091,11 +1266,11 @@ def adjacent_chain():
 def tpl2tpl_edge(mov, fix, out_dir, bcp_dir=None, mni_dir=None, qc_figure=True, register=True):
     """tpl2tpl: registration of template `mov` to template `fix` (names as template_by_name), the same as a visit:
     register_to_template with the skull-stripped mov T1 as moving image (antsRegistrationSyN.sh defaults, T1 only, fix
-    mask), then registration_qc as in direct_normalization_qc (T1 r; Dice, HD95, log10(HD95) of the mov brain mask and
+    mask), then registration_qc as in direct_norm_qc (T1 r; Dice, HD95, log10(HD95) of the mov brain mask and
     of the cerebellum; figure), but the Jacobian of the whole transform (0GenericAffine + 1Warp, full_jacobian; as
     avgsubj_edge, whose average field has the affine in it). The cerebellums are the template cerebellums that are the
     reference of the direct QC (BCP-<m>M-T1_cerebellum_suitpy_dseg, MNI cerebellum_mask), so no SUITPy run;
-    'needs_visual_check' as in direct_normalization_qc: cerebellum Dice below CEREB_DICE_MIN. register=False: the
+    'needs_visual_check' as in direct_norm_qc: cerebellum Dice below CEREB_DICE_MIN. register=False: the
     registration of the json is kept, only the QC again (e.g. after a change of the QC). Saved in out_dir:
     <mov>_tpl2tpl_to-<fix>_{0GenericAffine.mat, 1Warp.nii.gz, 1InverseWarp.nii.gz, Warped.nii.gz}, _qc.png and
     <mov>_tpl2tpl_to-<fix>.json (registration, QC, software), whose content it returns."""
@@ -1151,7 +1326,8 @@ def template_cerebellum_figure(t1, new, old, out_png, text, old_label='earlier t
     """T1 of a template (or of a visit, brain_to_cerebellum) through the centre of the new cerebellum (three planes): new
     cerebellum filled, the other cerebellum `old` (if any; earlier template cerebellum) dashed."""
     import matplotlib
-    matplotlib.use('Agg')
+    if 'inline' not in matplotlib.get_backend():  # in a notebook keep its inline figures (Agg there stops plt.show)
+        matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     img = np.squeeze(np.asanyarray(nib.load(t1).dataobj)).astype(float)
     c = np.round(np.mean(np.nonzero(new), axis=1)).astype(int)
@@ -1450,11 +1626,11 @@ def visit_to_mni(normalize_json, way, path=(), child=None, xfm_root=None, mni_di
     return res
 
 
-def submit_visits_to_mni(visits, run_dir, xfm_root, setup='', max_running=50):
+def submit_visits_to_mni(visits, run_dir, xfm_root, setup='', max_running=50, log_name='to_mni'):
     """visit_to_mni of many visits as one Slurm job array (TO_MNI_JOB; array to_mni), one task per visit with all of
     its ways in turn. visits: one dict per visit with normalize_json, child and ways ({way: path}, e.g. {'direct': [],
-    'tpl2tpl': [...], 'avgsubj': [...]}); per visit the job script and output <visit folder>/log/<prefix>_to_mni.sh /
-    .out. run_dir: the task list to_mni_tasks.tsv (line i = task i), the array script and the Slurm output per task
+    'tpl2tpl': [...], 'avgsubj': [...]}, or a list of (way, path) for several paths of one way); per visit the job
+    script and output <visit folder>/log/<prefix>_<log_name>.sh / .out. run_dir: the task list to_mni_tasks.tsv (line i = task i), the array script and the Slurm output per task
     (as submit_direct_normalize_array). Returns {'job_id', 'run_dir', 'visits': the dicts with task, script, log}."""
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -1464,9 +1640,10 @@ def submit_visits_to_mni(visits, run_dir, xfm_root, setup='', max_running=50):
         prefix = json.loads(nj.read_text())['inputs']['prefix']
         cmds = [['python', '-c', f'import sys; sys.path.insert(0, {str(HERE)!r}); import neonorm; '
                  f'neonorm.SHOW_TOOL_OUTPUT = True; neonorm.visit_to_mni({str(nj)!r}, {way!r}, {list(path)!r}, '
-                 f'{v.get("child")!r}, {str(xfm_root)!r})'] for way, path in v['ways'].items()]
-        sh = _job_script(f'to_mni_{prefix}', f'{prefix}_to_mni', nj.parent / 'log', cmds, setup, **TO_MNI_JOB)
-        rows.append({**v, 'task': i, 'script': str(sh), 'log': str(nj.parent / 'log' / f'{prefix}_to_mni.out')})
+                 f'{v.get("child")!r}, {str(xfm_root)!r})']
+                for way, path in (v['ways'].items() if isinstance(v['ways'], dict) else v['ways'])]
+        sh = _job_script(f'to_mni_{prefix}', f'{prefix}_{log_name}', nj.parent / 'log', cmds, setup, **TO_MNI_JOB)
+        rows.append({**v, 'task': i, 'script': str(sh), 'log': str(nj.parent / 'log' / f'{prefix}_{log_name}.out')})
     tasks = run_dir / 'to_mni_tasks.tsv'
     tasks.write_text(''.join(f"{r['script']}\t{r['log']}\n" for r in rows))
     sh = run_dir / 'to_mni_array.sh'
@@ -1758,14 +1935,20 @@ def submit_adult_mni_metrics(adults, out_dir, setup='', n_chunks=20):
 
 
 WAY_COLORS = {'direct': 'gray', 'tpl2tpl': '#1B2A7B', 'avgsubj': '#8B1A1A', 'avgsubjl1o': '#CD5C5C'}  # earlier notebooks
-EVAL_METRICS = {  # mni_metrics value -> axis label, sign (1: higher is better, -1: lower is better, 0: neither), y limits
-    'brain_dice': ('Brain Dice', 1, None),
-    'brain_log10_hd95': ('Brain HD95 (log10 mm)', -1, None),
-    'cerebellum_dice': ('Cerebellum Dice', 1, None),
-    'cerebellum_log10_hd95': ('Cerebellum HD95 (log10 mm)', -1, None),
-    't1_corr': ('T1 r with MNI', 1, (0, 1)),
-    'logjd_mean': ('Mean logJD', 0, None),
-    'logjd_fold_pct': ('Folded voxels (%)', -1, None),
+
+
+def way_colors(ways):
+    """WAY_COLORS for the ways of one figure: avgsubjl1o in the colour of avgsubj, unless avgsubj is in the figure too."""
+    return {**WAY_COLORS, **({} if 'avgsubj' in ways else {'avgsubjl1o': WAY_COLORS['avgsubj']})}
+EVAL_METRICS = {  # mni_metrics value -> panel title (what the metric means), y label (the metric), sign (1: higher is
+    # better, -1: lower is better, 0: neither), y limits
+    'brain_dice': ('Brain overlap', 'Dice', 1, None),
+    'brain_log10_hd95': ('Brain boundary error', 'HD95 (log10 mm)', -1, None),
+    'cerebellum_dice': ('Cerebellum overlap', 'Dice', 1, None),
+    'cerebellum_log10_hd95': ('Cerebellum boundary error', 'HD95 (log10 mm)', -1, None),
+    't1_corr': ('Overall structural alignment', 'T1 r with MNI', 1, (0, 1)),
+    'logjd_mean': ('Volume change to MNI', 'mean logJD', 0, None),
+    'logjd_fold_pct': ('Folding', 'folded voxels (%)', -1, None),
 }
 OLDER_AGE_EDGES = (96, 132, 168, 216)  # months: age groups of the datasets other than BCP (HCPD: 8-11, 11-14, 14-18 y)
 
@@ -1789,13 +1972,39 @@ def eval_groups(dataset, age_months):
     return labels, order
 
 
+def eval_group_x(dataset, age_months):
+    """eval_groups and the position of each visit at its real age on their axis (group k at k): BCP linear between the
+    template months (e.g. 2.4 months between 2M and 3M, half a step outside the first and last month), other datasets
+    linear within the years of their group. Returns the labels, the groups in plotting order and the positions."""
+    labels, order = eval_groups(dataset, age_months)
+    labels, ds, a = np.asarray(labels), np.asarray(dataset), np.asarray(age_months, float)
+    x_of = {g: i for i, g in enumerate(order)}
+    x = np.array([x_of[g] for g in labels], float)
+    b = ds == 'BCP'
+    bcp = [g for g in order if g in set(labels[b])]
+    if bcp:
+        mo, po = np.array([int(g[:-1]) for g in bcp], float), np.array([x_of[g] for g in bcp], float)
+        xb = np.interp(a[b], mo, po)
+        if len(mo) > 1:
+            xb = np.where(a[b] < mo[0], po[0] - np.minimum(0.5, (mo[0] - a[b]) / (mo[1] - mo[0])), xb)
+            xb = np.where(a[b] > mo[-1], po[-1] + np.minimum(0.5, (a[b] - mo[-1]) / (mo[-1] - mo[-2])), xb)
+        x[b] = xb
+    for g in order:
+        if g not in bcp and not g.endswith('other'):
+            lo, hi = (int(v) * 12 for v in g.split()[-1][:-1].split('-'))
+            sel = (labels == g) & ~b
+            x[sel] = x_of[g] - 0.5 + (a[sel] - lo) / (hi - lo)
+    return list(labels), order, x
+
+
 def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'avgsubj'), adult_ref=None,
-                  significance=True, alpha=0.05, adult_label='adult reference', out_png=None):
+                  significance=True, alpha=0.05, adult_label='adult reference', points=False, title=None, out_png=None,
+                  colors=None):
     """Values at MNI per age group (eval_groups), as the figures of the earlier evaluation
     (2.2nd_postnatal_step_in.ipynb, plot_metrics_grid): one panel per metric, stacked; per way the mean +/- SD of each
     group, connected within a dataset (BCP template months; the other datasets apart, after a dotted line), the ways
     side by side; x labels with the number of visits.
-    df: one row per visit x way (dataset, participant_id, age_months, way and the metric columns; 5.2_mni_metrics.tsv).
+    df: one row per visit x way (dataset, participant_id, age_months, way and the metric columns; 5.3_mni_metrics.tsv).
     adult_ref: None, or one row per adult with the metric columns (adult_mni_metrics): grey band mean +/- SD, dotted
     line at the mean, over the whole x axis.
     significance: per group and pair of ways a paired Wilcoxon signed-rank test (visits with both values), FDR
@@ -1803,6 +2012,11 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
     each pair with q < alpha (stars: * q < 0.05, ** < 0.01, *** < 0.001; non-significant pairs are not drawn), the
     pairs of a metric on fixed levels, one per pair (the shorter ones lower). The better way of each pair (EVAL_METRICS sign) is in
     the tests table.
+    points: also every visit as a faint dot at its real age on the same axis (BCP: linear between the template months,
+    e.g. 2.4 months between 2M and 3M; other datasets: linear within the years of the group).
+    title: figure title (top left).
+    out_png: also saved as PDF (same name, .pdf).
+    colors: {way: colour} added to way_colors(ways) (e.g. for other labels in the column way, such as the paths of notebook 6).
     Returns the figure, the summary (metric, way, group, n, mean, sd) and the tests (metric, group, pair, n, p, q,
     better)."""
     import matplotlib.pyplot as plt
@@ -1810,7 +2024,8 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
     from matplotlib.patches import Patch
     from scipy.stats import wilcoxon
     from statsmodels.stats.multitest import multipletests
-    ways, metrics = list(ways), list(metrics)
+    ways, metrics, fig_title = list(ways), list(metrics), title  # title: the panel titles below
+    colors = {**way_colors(ways), **(colors or {})}
     d = df[df['way'].isin(ways)].copy()
     d['group'], groups = eval_groups(d['dataset'], d['age_months'])
     d[metrics] = d[metrics].replace([np.inf, -np.inf], np.nan)
@@ -1827,7 +2042,7 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
                 v = x[[a, b]].dropna() if {a, b} <= set(x) else pd.DataFrame(columns=[a, b])
                 diff = v[a] - v[b]
                 p = wilcoxon(v[a], v[b]).pvalue if (diff != 0).sum() > 0 else np.nan
-                sign = EVAL_METRICS.get(m, (m, 0, None))[1]
+                sign = EVAL_METRICS.get(m, (m, m, 0, None))[2]
                 rows.append({'metric': m, 'group': g, 'pair': f'{a} vs {b}', 'n': len(v), 'p': p,
                              'better': (a if diff.mean() * sign > 0 else b) if sign and len(v) else None})
         r = pd.DataFrame(rows)
@@ -1848,22 +2063,27 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
     level = {q: i for i, q in enumerate(sorted(pairs, key=lambda q: (span[q], ways.index(q[0]))))}  # one per pair, short low
     n_levels = len(pairs)
     stars = lambda q: '***' if q < 0.001 else '**' if q < 0.01 else '*'
-    fig, axes = plt.subplots(len(metrics), 1, figsize=(max(10, 0.6 * len(groups)), 3.4 * len(metrics)), squeeze=False)
+    if points:  # x of each visit at its real age (eval_group_x)
+        d['x_age'] = eval_group_x(d['dataset'], d['age_months'])[2]
+    fig, axes = plt.subplots(len(metrics), 1, figsize=(max(7, 0.5 * len(groups)), 3.4 * len(metrics)), squeeze=False)
     for ax, m in zip(axes[:, 0], metrics):
-        label, sign, ylim = EVAL_METRICS.get(m, (m, 0, None))
+        title, label, sign, ylim = EVAL_METRICS.get(m, (m, m, 0, None))
         s = summary[summary['metric'] == m]
+        for w in ways if points else []:
+            v = d[d['way'] == w]
+            ax.scatter(v['x_age'], v[m], s=12, color=colors.get(w), alpha=0.35, linewidths=0, zorder=1)
         for w in ways:
             sw = s[s['way'] == w].set_index('group')
             for seg in segments:
                 p = sw.reindex([g for g in seg if g in sw.index])
                 x = [x_of[g] + off[w] for g in p.index]
-                ax.plot(x, p['mean'], color=WAY_COLORS.get(w), lw=2, marker='o', ms=4)
-                ax.errorbar(x, p['mean'], yerr=p['sd'], fmt='none', color=WAY_COLORS.get(w), capsize=3, capthick=1,
+                ax.plot(x, p['mean'], color=colors.get(w), lw=2, marker='o', ms=4)
+                ax.errorbar(x, p['mean'], yerr=p['sd'], fmt='none', color=colors.get(w), capsize=3, capthick=1,
                             elinewidth=0.8)
         if adult_ref is not None and m in adult_ref:
             v = adult_ref[m].replace([np.inf, -np.inf], np.nan).dropna()
             if len(v):
-                ax.axhspan(v.mean() - v.std(), v.mean() + v.std(), color='gray', alpha=0.2, lw=0, zorder=0)
+                ax.axhspan(v.mean() - v.std(), v.mean() + v.std(), color='gray', alpha=0.12, lw=0, zorder=0)
                 ax.axhline(v.mean(), color='gray', ls=':', lw=1, zorder=0)
         for seg in segments[1:]:
             ax.axvline(x_of[seg[0]] - 0.5, color='#8a8984', ls=':', lw=1)
@@ -1882,6 +2102,7 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
             ax.set_yticks([v for v in ax.get_yticks() if lo - 1e-9 <= v <= hi + 1e-9])  # no ticks at the brackets
             ax.set_ylim(lo, hi + (n_levels + 0.3) * step)
             ax.spines['left'].set_bounds(lo, hi)
+        ax.set_title(title, fontsize=9, loc='left')
         ax.set_ylabel(label, fontsize=8)
         ax.set_xticks(range(len(groups)), [f"{g.replace(' ', chr(10))}\nn={n_of[g]}" for g in groups], fontsize=7)
         ax.set_xlim(-0.5, len(groups) - 0.5)
@@ -1890,18 +2111,24 @@ def plot_by_month(df, metrics=tuple(EVAL_METRICS), ways=('direct', 'tpl2tpl', 'a
         ax.spines[['top', 'right']].set_visible(False)
     axes[-1, 0].set_xlabel('BCP: age-specific template (nearest to the age, months) | other datasets: age group',
                            fontsize=8)
-    handles = [Line2D([0], [0], color=WAY_COLORS.get(w), lw=2, marker='o', ms=4, label=f'{w} (mean +/- SD)')
+    handles = [Line2D([0], [0], color=colors.get(w), lw=2, marker='o', ms=4, label=f'{w}')
                for w in ways]
     if adult_ref is not None:
-        handles.append(Patch(color='gray', alpha=0.2, label=f'{adult_label} (mean +/- SD, n={len(adult_ref)})'))
+        handles.append(Patch(color='gray', alpha=0.12, label=f'{adult_label} (n={len(adult_ref)})'))
     if significance:
         handles.append(Line2D([0], [0], color='gray', lw=0.8,
                               label='paired Wilcoxon, FDR: * q < 0.05, ** < 0.01, *** < 0.001'))
-    fig.legend(handles=handles, loc='upper center', ncol=len(handles), frameon=False, fontsize=8)
+    if points:
+        handles.append(Line2D([0], [0], ls='', marker='o', ms=4, color='gray', alpha=0.4, label='one dot per visit (real age)'))
+    fig.legend(handles=handles, loc='upper right', ncol=len(handles), frameon=False, fontsize=8)
+    if fig_title:
+        fig.suptitle(fig_title, x=0.01, y=1 - 0.1 / fig.get_figheight(), ha='left', va='top', fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 1 - 0.25 / fig.get_figheight()))
     if out_png:
         fig.savefig(out_png, dpi=150)
+        fig.savefig(Path(out_png).with_suffix('.pdf'))
     return fig, summary, tests
+
 
 
 LONGI_JOB = {'cpus': 4, 'mem': '32G', 'time': '04:00:00'}  # Slurm resources of one longitudinal_r (a few hundred maps)
@@ -1951,32 +2178,171 @@ def submit_longitudinal_r(tasks, out_dir, setup=''):
     return jobs
 
 
+BIAS_JOB = {'cpus': 4, 'mem': '32G', 'time': '04:00:00'}  # Slurm resources of one logjd_bias (a few dozen visits)
+
+
+def logjd_bias(visits, ways, out_dir, name, mni_dir=None, alpha=0.05, n_perm=5000, seed=0):
+    """Systematic bias of indirect ways against direct (as the bias evaluation of depreciated/1.tpl_xfm_build.ipynb, 7):
+    per visit and way the difference of the logJD at MNI, way - direct, inside the MNI brain mask; per voxel a one-sample
+    t-test of the differences of the visits against 0 (two-sided), corrected over the voxels in two ways: FDR
+    (Benjamini-Hochberg, q < alpha) and FWE (sign-flip permutation of the visits, maximum |t| over the voxels, as FSL
+    randomise; all 2^n flips if not more than n_perm, else n_perm random ones with the identity; p < alpha; stricter).
+    visits: list of {'key', 'direct': file, <way>: file}. Writes per way <out_dir>/<name>_<way>_t.nii.gz (t map,
+    float32, 0 outside the mask) and <out_dir>/<name>.tsv, one row per way: n, voxels, pct_q / pct_fwe (voxels with a
+    bias, FDR / FWE, %), pct_q_pos / pct_q_neg, pct_fwe_pos / pct_fwe_neg (of them way > direct / way < direct), t_fdr /
+    t_fwe (smallest |t| with a bias), pct_p / t_p (uncorrected p < alpha: voxels, %; |t| threshold), n_perm (sign flips), mean_abs_t, mean_abs_d (mean |Cohen's d| = |mean| / SD of the
+    differences, independent of n), mean_bias (mean over the voxels of the mean difference). Per visit and way
+    (<out_dir>/<name>_visits.tsv; the mean over the visits is the group value, except pct_bias_*): mean_diff (mean
+    difference over the voxels; -> mean_bias), d (mean over the voxels of the difference / SD of the group, in the
+    direction of the group mean; -> mean_abs_d), pct_bias_fdr / pct_bias_fwe (voxels with a bias, FDR / FWE, where the
+    visit differs in the direction of the group, % of the mask; <= pct_q / pct_fwe). Returns the table."""
+    ref = nib.load(mni_template(mni_dir)['mask'])
+    tm = np.squeeze(np.asanyarray(ref.dataobj)) > 0
+    load = lambda f: np.squeeze(np.asarray(nib.load(f).dataobj, dtype=np.float32))[tm]
+    diff = {w: np.empty((len(visits), int(tm.sum())), np.float32) for w in ways}  # visits x voxels
+    for i, v in enumerate(visits):
+        d = load(v['direct'])
+        for w in ways:
+            diff[w][i] = load(v[w]) - d
+    return _bias_stats(diff, [v['key'] for v in visits], ref, tm, out_dir, name, alpha, n_perm, seed)
+
+
+def _bias_stats(diff, keys, ref, tm, out_dir, name, alpha=0.05, n_perm=5000, seed=0):
+    """The statistics and files of logjd_bias from the differences way - direct, {way: visits x voxels of the mask tm}
+    (float32); keys: one per visit, ref: the image of the mask."""
+    from scipy.stats import t as t_dist
+    n, nv = len(keys), int(tm.sum())
+    if 2 ** n <= n_perm:  # every sign flip (the first: the identity)
+        flips = 1 - 2 * ((np.arange(2 ** n)[:, None] >> np.arange(n)) & 1)
+    else:
+        flips = np.vstack([np.ones((1, n)), np.random.default_rng(seed).choice([-1, 1], (n_perm - 1, n))])
+    flips = flips.astype(np.float32)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    rows, per_visit = [], []
+    for w in diff:
+        x = diff[w]
+        mean = x.mean(0, dtype=np.float64)
+        ss = np.einsum('ij,ij->j', x, x, dtype=np.float64)  # sum of squares: the same for every sign flip
+        sd = np.sqrt(np.maximum(ss / n - mean ** 2, 0) * n / (n - 1))
+        t = np.divide(mean, sd / np.sqrt(n), out=np.zeros_like(mean), where=sd > 0)
+        p = 2 * t_dist.sf(np.abs(t), n - 1)
+        o = np.argsort(p)  # Benjamini-Hochberg
+        q = np.empty_like(p)
+        q[o] = np.minimum(np.minimum.accumulate((p[o] * len(p) / np.arange(1, len(p) + 1))[::-1])[::-1], 1)
+        sig = q < alpha
+        max_t = np.empty(len(flips))  # FWE: maximum |t| over the voxels per sign flip
+        ss32 = (ss / n).astype(np.float32)
+        for k in range(0, len(flips), 50):
+            m = flips[k:k + 50] @ x / n
+            sd_k = np.sqrt(np.maximum(ss32 - m ** 2, 0) * (n / (n - 1)))
+            max_t[k:k + 50] = np.abs(np.divide(m, sd_k / np.sqrt(n), out=np.zeros_like(m), where=sd_k > 0)).max(1)
+        p_fwe = (len(max_t) - np.searchsorted(np.sort(max_t), np.abs(t), side='left')) / len(max_t)
+        fwe = p_fwe < alpha
+        full = np.zeros(tm.shape, dtype=np.float32)
+        full[tm] = t
+        nib.save(nib.Nifti1Image(full, ref.affine), out_dir / f'{name}_{w}_t.nii.gz')
+        rows.append({'way': w, 'n': n, 'voxels': nv, 'pct_q': 100 * sig.mean(),
+                     'pct_q_pos': 100 * (sig & (t > 0)).mean(), 'pct_q_neg': 100 * (sig & (t < 0)).mean(),
+                     't_fdr': float(np.abs(t[sig]).min()) if sig.any() else np.nan, 'pct_fwe': 100 * fwe.mean(),
+                     'pct_fwe_pos': 100 * (fwe & (t > 0)).mean(), 'pct_fwe_neg': 100 * (fwe & (t < 0)).mean(),
+                     't_fwe': float(np.abs(t[fwe]).min()) if fwe.any() else np.nan, 'n_perm': len(flips),
+                     'pct_p': 100 * (p < alpha).mean(), 't_p': float(t_dist.isf(alpha / 2, n - 1)),
+                     'mean_abs_t': float(np.abs(t).mean()),
+                     'mean_abs_d': float(np.abs(np.divide(mean, sd, out=np.zeros_like(mean), where=sd > 0)).mean()),
+                     'mean_bias': float(mean.mean())})
+        sign = np.sign(mean)
+        for i, key in enumerate(keys):  # each visit against the group
+            per_visit.append({'key': key, 'way': w, 'mean_diff': float(x[i].mean(dtype=np.float64)),
+                              'd': float((sign * np.divide(x[i], sd, out=np.zeros(nv), where=sd > 0)).mean()),
+                              'pct_bias_fdr': float(100 * (sig & (np.sign(x[i]) == sign)).mean()),
+                              'pct_bias_fwe': float(100 * (fwe & (np.sign(x[i]) == sign)).mean())})
+    pd.DataFrame(per_visit).to_csv(out_dir / f'{name}_visits.tsv', sep='\t', index=False)
+    table = pd.DataFrame(rows)
+    table.to_csv(out_dir / f'{name}.tsv', sep='\t', index=False)
+    return table
+
+
+def submit_logjd_bias(groups, ways, out_dir, setup=''):
+    """logjd_bias of each group ({name: visits}) as one Slurm job (BIAS_JOB; job bias_<name>): <out_dir>/<name>.tsv,
+    <name>_visits.tsv and <name>_<way>_t.nii.gz, the visits in <out_dir>/logs/<name>.json, script and output <out_dir>/logs/<name>.sh / .out.
+    Returns one dict per group: name, n, job_id."""
+    return [{'name': name, 'n': len(v), 'job_id': _submit_python(f'bias_{name}', name, Path(out_dir) / 'logs', 'logjd_bias',
+                                                                  {'visits': v, 'ways': list(ways), 'out_dir': str(out_dir),
+                                                                   'name': name}, BIAS_JOB, setup)}
+            for name, v in groups.items()]
+
+
+BIAS_EDGE_JOB = {'cpus': 4, 'mem': '32G', 'time': '12:00:00'}  # Slurm resources of one edge_bias (up to about 100 visits)
+
+
+def edge_bias(a, b, visits, ways, out_dir, name, xfm_root, alpha=0.05, n_perm=5000, seed=0):
+    """Systematic bias of one template edge a -> b, as the bias evaluation of depreciated/1.tpl_xfm_build.ipynb, 7: per
+    visit used for the edge the log Jacobian determinant at template b (one field, CreateJacobianDeterminantImage, template
+    mask of b) of visit -> a (its direct registration) + the edge minus that of visit -> b (its direct registration); then
+    the statistics of logjd_bias. ways: 'tpl2tpl' (the registration of the templates) and 'avgsubjl1o' (the average
+    without the visits of the visit's child, avgsubj_field_without). visits: list of {'key', 'normalize_json', 'child'}.
+    Direct is here the registration to the next template, usable also in the youngest visits. Keeps only what
+    logjd_bias writes: <out_dir>/<name>.tsv, <name>_visits.tsv, <name>_<way>_t.nii.gz (template b). Returns the table."""
+    if n_threads():
+        os.environ.setdefault('ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS', str(n_threads()))  # ANTs threads
+    tpl = template_by_name(b)
+    ref = nib.load(tpl['mask'])
+    tm = np.squeeze(np.asanyarray(ref.dataobj)) > 0
+    diff = {w: np.empty((len(visits), int(tm.sum())), np.float32) for w in ways}  # visits x voxels
+    with tempfile.TemporaryDirectory() as tmp:
+        field, jd = os.path.join(tmp, 'field.nii'), os.path.join(tmp, 'logjd.nii')
+
+        def logjd(tx):
+            run_ants('antsApplyTransforms', '-d', 3, '-r', tpl['t1'], '-o', f'[{field},1]', *[x for t in tx for x in ('-t', t)])
+            run_ants('CreateJacobianDeterminantImage', 3, field, jd, 1, 0)
+            return np.squeeze(np.asarray(nib.load(jd).dataobj, dtype=np.float32))[tm]
+
+        for i, v in enumerate(visits):
+            _section(f"{a} -> {b}: visit {i + 1} of {len(visits)}, {v['key']}")
+            reg = json.loads(Path(v['normalize_json']).read_text())['normalize']
+            direct = logjd([reg[b]['warp'], reg[b]['affine']])
+            for w in ways:
+                edge = (chain_transforms([a, b], Path(xfm_root) / 'tpl2tpl') if w == 'tpl2tpl' else
+                        [avgsubj_field_without(a, b, v['child'], os.path.join(tmp, 'edge.nii'), Path(xfm_root) / 'avgsubj')['field']])
+                diff[w][i] = logjd(edge + [reg[a]['warp'], reg[a]['affine']]) - direct
+    return _bias_stats(diff, [v['key'] for v in visits], ref, tm, out_dir, name, alpha, n_perm, seed)
+
+
+def submit_edge_bias(edges, ways, out_dir, xfm_root, setup=''):
+    """edge_bias of each edge ({name: {'a', 'b', 'visits'}}) as one Slurm job (BIAS_EDGE_JOB; job ebias_<name>); the
+    arguments, script and output in <out_dir>/logs/<name>.json / .sh / .out. Returns one dict per edge: name, n, job_id."""
+    return [{'name': name, 'n': len(e['visits']),
+             'job_id': _submit_python(f'ebias_{name}', name, Path(out_dir) / 'logs', 'edge_bias',
+                                      {**e, 'ways': list(ways), 'out_dir': str(out_dir), 'name': name, 'xfm_root': str(xfm_root)},
+                                      BIAS_EDGE_JOB, setup)}
+            for name, e in edges.items()]
+
+
 def main():
-    p = argparse.ArgumentParser(description='neonorm for one visit: step 1 (preprocessing: orientation, skull '
-                                            'stripping + QC), or step 2 (direct normalisation) with --direct_normalize')
+    p = argparse.ArgumentParser(description='neonorm for one visit: step 1 (preprocessing: orientation, brain mask, '
+                                            'skull stripping + N4), or step 2 (direct normalisation) with '
+                                            '--direct_normalize, or its QC with --direct_norm_qc')
     p.add_argument('--check', action='store_true', help='check the software setup and exit')
-    p.add_argument('t1', nargs='?')
+    p.add_argument('t1', nargs='?', help='step 1: the T1 as acquired; step 2: <prefix>_T1w_brain_n4.nii.gz of step 1')
     p.add_argument('age_months', nargs='?', type=float, help='age at scan in months')
     p.add_argument('out_dir', nargs='?')
-    p.add_argument('--t2', help='T2 (with --direct_normalize, optional: the T2 on the T1 grid, '
-                                '<prefix>_T2w_rigid2T1.nii.gz of step 1; skull-stripped and bias corrected, not used for '
-                                'the registration)')
-    p.add_argument('--prefix', help='file name prefix (default: the T1 file name without _T1w.nii.gz)')
-    p.add_argument('--save_brain', action='store_true', help='also save the skull-stripped T1 (and T2 on the T1 grid)')
-    p.add_argument('--t1_brain', help='save the skull-stripped T1 to this path')
-    p.add_argument('--qc_figure', action='store_true', help='write the QC figure also when nothing is flagged')
+    p.add_argument('--t2', help='step 1: the T2 as acquired (optional); step 2: recorded for the QC (default: the rigid '
+                                'T2 of <prefix>_preprocess.json)')
+    p.add_argument('--prefix', help='file name prefix (default: the T1 file name without _T1w.nii.gz / '
+                                    '_T1w_brain_n4.nii.gz)')
+    p.add_argument('--brain_mask', help='step 1: an own brain mask on the T1 as acquired instead of SynthStrip; step 2: '
+                                        'recorded for the QC (default: the mask of <prefix>_preprocess.json)')
     p.add_argument('--direct_normalize', action='store_true',
-                   help='step 2 instead of step 1: t1 = the T1 of step 1 (orientation), needs --brain_mask; out_dir '
-                        'optional (default: the folder of t1)')
-    p.add_argument('--brain_mask', help='step 2: brain mask of step 1')
-    p.add_argument('--steps', type=int, nargs='+', default=[1, 2, 3], choices=[1, 2, 3],
-                   help='with --direct_normalize, the parts of step 2: 1 = 2a skull stripping + N4 (T1, T2), '
-                        '2 = 2b registrations, 3 = 2c QC (default: all)')
+                   help='step 2 instead of step 1: t1 = <prefix>_T1w_brain_n4.nii.gz of step 1; out_dir optional '
+                        '(default: the folder of t1)')
+    p.add_argument('--direct_norm_qc', metavar='NORMALIZE_JSON',
+                   help='the QC of steps 1-2, of <out_dir>/<prefix>_direct_normalize.json (no other argument)')
     p.add_argument('--templates', nargs='+',
-                   help='with --direct_normalize, 2b: template names (e.g. BCP05M MNI152NLin2009cSym; default: the '
+                   help='with --direct_normalize: template names (e.g. BCP05M MNI152NLin2009cSym; default: the '
                         'BCP template of the nearest atlas month and MNI); templates registered before are kept')
     p.add_argument('--no_rotation_init', dest='rotation_init', action='store_false',
-                   help='with --direct_normalize, 2b: the centre-of-mass start of antsRegistrationSyN.sh instead of '
+                   help='with --direct_normalize: the centre-of-mass start of antsRegistrationSyN.sh instead of '
                         'the default, a rotation search (antsAI) against the BCP template of the age')
     p.add_argument('--rotation_init', action='store_true', help=argparse.SUPPRESS)  # the default; older job scripts
     p.set_defaults(rotation_init=True)
@@ -2002,26 +2368,26 @@ def main():
         problems = check_environment(verbose=True)
         print('\nready' if not problems else '\nnot ready:\n  - ' + '\n  - '.join(problems))
         sys.exit(1 if problems else 0)
+    if a.direct_norm_qc:
+        q = direct_norm_qc(a.direct_norm_qc)
+        _section('done: --direct_norm_qc')
+        print(json.dumps({'cerebellum': q['t1_cerebellum'], 'needs_visual_check': q['needs_visual_check'],
+                          'qc': {name: {k: v for k, v in x.items() if k != 'qc_figure'} for name, x in q['qc'].items()}},
+                         indent=2, default=str))
+        return
     if a.direct_normalize:
-        if not (a.t1 and a.age_months is not None and a.brain_mask):
-            p.error('--direct_normalize needs t1, age_months and --brain_mask')
-        out = direct_normalize(a.t1, a.age_months, a.brain_mask, a.out_dir, t2=a.t2, prefix=a.prefix, steps=a.steps,
-                               rotation_init=a.rotation_init, templates=a.templates)
-        _section(f'done: --steps {a.steps}')
-        summary = {'head2brain': out.get('head2brain') if 1 in a.steps else None,
-                   'normalize': {name: {k: r[k] for k in ('affine', 'warp', 'inverse_warp', 'warped')}
-                                 for name, r in out.get('normalize', {}).items()} if 2 in a.steps else None}
-        if 3 in a.steps:
-            q = out['qc']
-            summary['qc'] = {'cerebellum': q['t1_cerebellum'], 'needs_visual_check': q['needs_visual_check'],
-                             'qc': {name: {k: v for k, v in x.items() if k != 'qc_figure'} for name, x in q['qc'].items()}}
-        print(json.dumps({k: v for k, v in summary.items() if v is not None}, indent=2, default=str))
+        if not (a.t1 and a.age_months is not None):
+            p.error('--direct_normalize needs t1 (<prefix>_T1w_brain_n4.nii.gz) and age_months')
+        out = direct_normalize(a.t1, a.age_months, a.out_dir, prefix=a.prefix, brain_mask=a.brain_mask, t2=a.t2,
+                               templates=a.templates, rotation_init=a.rotation_init)
+        _section('done: --direct_normalize')
+        print(json.dumps({name: {k: r[k] for k in ('affine', 'warp', 'inverse_warp', 'warped')}
+                          for name, r in out.get('normalize', {}).items()}, indent=2, default=str))
         return
     if not (a.t1 and a.age_months is not None and a.out_dir):
         p.error('t1, age_months and out_dir are required (or use --check)')
-    out = preprocess(a.t1, a.age_months, a.out_dir, a.t2, a.prefix, a.t1_brain, a.save_brain, a.qc_figure)
-    print(json.dumps(out['skull_strip'].get('qc', {}), indent=2, default=str))
-
+    out = preprocess(a.t1, a.age_months, a.out_dir, a.t2, a.prefix, a.brain_mask)
+    print(json.dumps({k: out[k] for k in ('orient', 'skull_strip', 'head2brain')}, indent=2, default=str))
 
 if __name__ == '__main__':
     main()

@@ -1,0 +1,3 @@
+participant_id	age_months	t1	t2	brain_mask
+sub-ex01	1.0	sub-ex01_T1w.nii.gz	sub-ex01_T2w.nii.gz	
+sub-ex02	8.8	sub-ex02_T1w.nii.gz		
